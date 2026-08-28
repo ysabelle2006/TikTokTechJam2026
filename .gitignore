@@ -1,0 +1,24 @@
+# Local dataset - never upload to GitHub
+/data/
+
+# Python virtual environment
+/.venv/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# macOS files
+.DS_Store
+
+# Temporary images used for testing
+/test_image.jpg
+/test_jpeg.jpg
+/test_blur.jpg
+/test_resize.jpg
+/test_noise.jpg
+/test_color.jpg
+/test_crop.jpg
+
+# Temporary visual augmentation outputs
+/visual_*.png

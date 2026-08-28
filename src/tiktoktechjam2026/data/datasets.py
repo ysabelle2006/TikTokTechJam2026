@@ -1,15 +1,56 @@
-"""
-Dataset loaders for the AIGC detection sources named in the brief:
-  - CIFAKE (small, fast to iterate on -- good first target)
-  - SID_Set
-  - WildFake (translate via the ModelScope UI before use, per the brief)
+from pathlib import Path
 
-The validation set (COCO val2017 vs. the DALL-E Advanced subset of
-WildFake) stays entirely separate: it's for demonstrating progress
-only and must never be trained on.
+from PIL import Image
+from torch.utils.data import Dataset
 
-TODO (next step): once we know where the raw data will live locally,
-implement a dataset class per source with a consistent (image, label)
-interface, plus a generator_family field so we can later hold one
-family out for the generalization test.
-"""
+
+class AIGCFolderDataset(Dataset):
+    def __init__(
+        self,
+        root_dir,
+        transform=None,
+        augmentation=None
+    ):
+        self.root_dir = Path(root_dir)
+        self.transform = transform
+        self.augmentation = augmentation
+
+        self.samples = []
+
+        class_map = {
+            "REAL": 0,
+            "FAKE": 1,
+        }
+
+        for class_name, label in class_map.items():
+            class_dir = self.root_dir / class_name
+
+            if not class_dir.exists():
+                continue
+
+            for image_path in class_dir.iterdir():
+                if image_path.suffix.lower() in {
+                    ".jpg",
+                    ".jpeg",
+                    ".png",
+                    ".webp"
+                }:
+                    self.samples.append((image_path, label))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, index):
+        image_path, label = self.samples[index]
+
+        image = Image.open(image_path).convert("RGB")
+
+        # Training augmentation happens first
+        if self.augmentation is not None:
+            image = self.augmentation(image)
+
+        # Model preprocessing happens after
+        if self.transform is not None:
+            image = self.transform(image)
+
+        return image, label
