@@ -1,0 +1,26 @@
+[project]
+name = "tiktoktechjam2026"
+version = "0.1.0"
+description = "Two-stream (spatial + frequency) detector for AI-generated images, robust to real-world post-processing."
+readme = "README.md"
+authors = [
+    { name = "Ysabelle", email = "ysabelle.wong@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "open-clip-torch>=2.24",
+    "pillow>=10.0",
+    "numpy>=1.26",
+    "opencv-python-headless>=4.9",
+    "scikit-learn>=1.4",
+    "tqdm>=4.66",
+]
+
+[project.scripts]
+tiktoktechjam2026 = "tiktoktechjam2026:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
