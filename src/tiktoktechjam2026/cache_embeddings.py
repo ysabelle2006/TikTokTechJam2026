@@ -26,10 +26,99 @@ TODO: implement once transforms/preprocessing.py and
 models/spatial_stream.py exist.
 """
 
+from pathlib import Path
 
-def main(image_dir: str, cache_dir: str):
-    raise NotImplementedError
+import torch
+from torch.utils.data import DataLoader, Subset
+
+from tiktoktechjam2026.data.datasets import AIGCFolderDataset
+from tiktoktechjam2026.models.spatial_stream import SpatialStream
+from tiktoktechjam2026.transforms.preprocessing import prepare_spatial_input
+
+
+def main(
+    image_dir: str,
+    cache_file: str,
+    max_samples: int = 100
+):
+    dataset = AIGCFolderDataset(
+        root_dir=image_dir,
+        augmentation=None,
+        transform=prepare_spatial_input
+    )
+
+    if max_samples is not None:
+        real_indices = []
+        fake_indices = []
+
+        for i, (_, label) in enumerate(dataset.samples):
+            if label == 0:
+                real_indices.append(i)
+            else:
+                fake_indices.append(i)
+
+        samples_per_class = max_samples // 2
+
+        selected_indices = (
+            real_indices[:samples_per_class]
+            + fake_indices[:samples_per_class]
+        )
+
+        dataset = Subset(dataset, selected_indices)
+
+    loader = DataLoader(
+        dataset,
+        batch_size=32,
+        shuffle=False
+    )
+
+    model = SpatialStream(freeze=True)
+
+    all_embeddings = []
+    all_labels = []
+
+    for batch_index, (images, labels) in enumerate(loader):
+        embeddings = model.encode(images)
+
+        all_embeddings.append(
+            embeddings.cpu()
+        )
+
+        all_labels.append(
+            labels.cpu()
+        )
+
+        if (batch_index + 1) % 50 == 0 or batch_index == 0:
+            print(
+                f"Processed batch {batch_index + 1} / {len(loader)}"
+            )
+
+    embeddings = torch.cat(all_embeddings, dim=0)
+    labels = torch.cat(all_labels, dim=0)
+
+    cache_path = Path(cache_file)
+    cache_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    torch.save(
+        {
+            "embeddings": embeddings,
+            "labels": labels
+        },
+        cache_path
+    )
+
+    print("Done!")
+    print("Saved to:", cache_path)
+    print("Embeddings shape:", embeddings.shape)
+    print("Labels shape:", labels.shape)
 
 
 if __name__ == "__main__":
-    raise NotImplementedError("wire up argparse once SpatialStream exists")
+    main(
+        image_dir="data/cifake/test",
+        cache_file="results/v0/test_embeddings_clean.pt",
+        max_samples=None
+    )

@@ -22,3 +22,6 @@ __pycache__/
 
 # Temporary visual augmentation outputs
 /visual_*.png
+
+# Generated model/embedding files
+*.pt

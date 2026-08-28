@@ -19,9 +19,36 @@ encode(image_tensor) -> 512-d embedding.
 """
 
 
+import torch
+import open_clip
+
+
 class SpatialStream:
     def __init__(self, freeze: bool = True):
-        raise NotImplementedError
+        self.device = torch.device(
+            "mps" if torch.backends.mps.is_available() else "cpu"
+        )
+
+        self.model, _, _ = open_clip.create_model_and_transforms(
+            "ViT-B-32",
+            pretrained="openai"
+        )
+
+        self.model = self.model.to(self.device)
+
+        if freeze:
+            for param in self.model.parameters():
+                param.requires_grad = False
+
+        self.model.eval()
 
     def encode(self, image_tensor):
-        raise NotImplementedError
+        image_tensor = image_tensor.to(self.device)
+
+        if image_tensor.dim() == 3:
+            image_tensor = image_tensor.unsqueeze(0)
+
+        with torch.no_grad():
+            embedding = self.model.encode_image(image_tensor)
+
+        return embedding
