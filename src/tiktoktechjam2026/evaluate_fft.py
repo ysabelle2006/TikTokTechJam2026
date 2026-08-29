@@ -4,6 +4,7 @@ import torch
 from torch import nn
 from torchvision.transforms.functional import pil_to_tensor
 from tqdm import tqdm
+from sklearn.metrics import roc_auc_score
 
 from tiktoktechjam2026.data.datasets import CIFAKEDataset
 from tiktoktechjam2026.models.frequency_stream import FrequencyStream
@@ -13,7 +14,7 @@ from tiktoktechjam2026.transforms.augmentations import (
 )
 
 
-def evaluate_predictions(predictions, labels):
+def evaluate_predictions(predictions, probabilities, labels):
     accuracy = (predictions == labels).float().mean().item()
 
     true_positive = ((predictions == 1) & (labels == 1)).sum().item()
@@ -33,8 +34,14 @@ def evaluate_predictions(predictions, labels):
         precision + recall, 1e-8
     )
 
+    auc = roc_auc_score(
+        labels.numpy(),
+        probabilities.numpy(),
+    )
+
     return {
         "accuracy": accuracy,
+        "auc": auc,
         "precision": precision,
         "recall": recall,
         "f1": f1,
@@ -51,7 +58,7 @@ def main():
     print("Device:", device)
 
     # ---------------------------------------------------------
-    # 1. Load trained SRM model
+    # 1. Load trained FFT model
     # ---------------------------------------------------------
     frequency = FrequencyStream("fft").to(device)
     classifier = nn.Linear(128, 1).to(device)
@@ -68,7 +75,7 @@ def main():
     classifier.eval()
 
     # ---------------------------------------------------------
-    # 2. Load SAME CIFAKE test set used for V0
+    # 2. Load SAME CIFAKE test set used before
     # ---------------------------------------------------------
     dataset = CIFAKEDataset(
         "data/CIFAKE",
@@ -104,6 +111,7 @@ def main():
     # ---------------------------------------------------------
     def run_condition(name, transform_fn=None):
         all_predictions = []
+        all_probabilities = []
         all_labels = []
 
         for i in tqdm(
@@ -115,7 +123,6 @@ def main():
             if transform_fn is not None:
                 image = transform_fn(image)
 
-            # PIL image -> [0,1] tensor for SRM
             image_tensor = (
                 pil_to_tensor(image)
                 .float()
@@ -132,15 +139,18 @@ def main():
                 prediction = (probability >= 0.5).float()
 
             all_predictions.append(prediction.cpu())
+            all_probabilities.append(probability.cpu())
             all_labels.append(
                 torch.tensor([label], dtype=torch.float32)
             )
 
         predictions = torch.cat(all_predictions)
+        probabilities = torch.cat(all_probabilities)
         labels = torch.cat(all_labels)
 
         return evaluate_predictions(
             predictions,
+            probabilities,
             labels,
         )
 
@@ -172,23 +182,42 @@ def main():
     clean_accuracy = results["clean"]["accuracy"]
 
     print("\nFFT ROBUSTNESS RESULTS")
-    print("-" * 52)
+    print("-" * 64)
     print(
         f"{'Condition':<22}"
         f"{'Accuracy':>10}"
         f"{'Drop':>10}"
+        f"{'AUC':>10}"
     )
-    print("-" * 52)
+    print("-" * 64)
 
     for name, metrics in results.items():
         accuracy = metrics["accuracy"]
         drop = clean_accuracy - accuracy
+        auc = metrics["auc"]
 
         print(
             f"{name:<22}"
             f"{accuracy:>10.3f}"
             f"{drop:>10.3f}"
+            f"{auc:>10.4f}"
         )
+
+    clean_auc = results["clean"]["auc"]
+
+    transformed_aucs = [
+        metrics["auc"]
+        for name, metrics in results.items()
+        if name != "clean"
+    ]
+
+    avg_robust_auc = sum(transformed_aucs) / len(transformed_aucs)
+
+    final_score = 0.5 * clean_auc + 0.5 * avg_robust_auc
+
+    print("\nclean AUC:      ", f"{clean_auc:.4f}")
+    print("avg robust AUC: ", f"{avg_robust_auc:.4f}")
+    print("final score:    ", f"{final_score:.4f}")
 
     # ---------------------------------------------------------
     # 6. Save results
@@ -204,23 +233,31 @@ def main():
         f.write("250 REAL / 250 FAKE\n\n")
 
         f.write("FFT ROBUSTNESS RESULTS\n")
-        f.write("-" * 52 + "\n")
+        f.write("-" * 64 + "\n")
         f.write(
             f"{'Condition':<22}"
             f"{'Accuracy':>10}"
-            f"{'Drop':>10}\n"
+            f"{'Drop':>10}"
+            f"{'AUC':>10}\n"
         )
-        f.write("-" * 52 + "\n")
+        f.write("-" * 64 + "\n")
 
         for name, metrics in results.items():
             accuracy = metrics["accuracy"]
             drop = clean_accuracy - accuracy
+            auc = metrics["auc"]
 
             f.write(
                 f"{name:<22}"
                 f"{accuracy:>10.3f}"
-                f"{drop:>10.3f}\n"
+                f"{drop:>10.3f}"
+                f"{auc:>10.4f}\n"
             )
+
+        f.write("\n")
+        f.write(f"clean AUC:       {clean_auc:.4f}\n")
+        f.write(f"avg robust AUC:  {avg_robust_auc:.4f}\n")
+        f.write(f"final score:     {final_score:.4f}\n")
 
     print("\nSaved results to:", output_path)
 

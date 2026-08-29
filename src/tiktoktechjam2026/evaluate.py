@@ -26,6 +26,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from tqdm import tqdm
+from sklearn.metrics import roc_auc_score
 
 from tiktoktechjam2026.data.datasets import CIFAKEDataset
 from tiktoktechjam2026.models.spatial_stream import SpatialStream
@@ -35,7 +36,7 @@ from tiktoktechjam2026.transforms.augmentations import (
 )
 
 
-def evaluate_predictions(predictions, labels):
+def evaluate_predictions(predictions, probabilities, labels):
     accuracy = (predictions == labels).float().mean().item()
 
     true_positive = ((predictions == 1) & (labels == 1)).sum().item()
@@ -55,8 +56,14 @@ def evaluate_predictions(predictions, labels):
         precision + recall, 1e-8
     )
 
+    auc = roc_auc_score(
+        labels.numpy(),
+        probabilities.numpy(),
+    )
+
     return {
         "accuracy": accuracy,
+        "auc": auc,
         "precision": precision,
         "recall": recall,
         "f1": f1,
@@ -70,8 +77,10 @@ def main():
         "cuda" if torch.cuda.is_available() else "cpu"
     )
 
+    print("Device:", device)
+
     # ---------------------------------------------------------
-    # 1. Load trained V0 classifier
+    # 1. Load trained V0 spatial classifier
     # ---------------------------------------------------------
     classifier = nn.Linear(512, 1).to(device)
 
@@ -84,20 +93,23 @@ def main():
     classifier.eval()
 
     # ---------------------------------------------------------
-    # 2. Load CLIP spatial encoder
+    # 2. Load frozen CLIP spatial encoder
     # ---------------------------------------------------------
     spatial = SpatialStream()
 
+    spatial.model.eval()
+
+    for param in spatial.model.parameters():
+        param.requires_grad = False
+
     # ---------------------------------------------------------
-    # 3. Load CIFAKE test dataset
+    # 3. Load SAME CIFAKE test subset
     # ---------------------------------------------------------
     dataset = CIFAKEDataset(
         "data/CIFAKE",
         split="test",
     )
 
-    # Use a balanced subset for robustness evaluation:
-    # 250 REAL + 250 FAKE = 500 images total
     real_indices = []
     fake_indices = []
 
@@ -110,20 +122,24 @@ def main():
         elif class_name == "FAKE" and len(fake_indices) < 250:
             fake_indices.append(i)
 
-        if len(real_indices) == 250 and len(fake_indices) == 250:
+        if (
+            len(real_indices) == 250
+            and len(fake_indices) == 250
+        ):
             break
 
     indices = real_indices + fake_indices
 
-    print("Robustness test images:", len(indices))
+    print("Evaluation images:", len(indices))
     print("REAL:", len(real_indices))
     print("FAKE:", len(fake_indices))
 
     # ---------------------------------------------------------
-    # 4. Evaluation helper
+    # 4. Evaluate one condition
     # ---------------------------------------------------------
     def run_condition(name, transform_fn=None):
         all_predictions = []
+        all_probabilities = []
         all_labels = []
 
         for i in tqdm(
@@ -135,35 +151,71 @@ def main():
             if transform_fn is not None:
                 image = transform_fn(image)
 
-            image_tensor = spatial.preprocess(image).unsqueeze(0)
-
-            embedding = spatial.encode(image_tensor)
-            embedding = F.normalize(embedding.float(), dim=1)
-
-            embedding = embedding.to(device)
-
-            with torch.no_grad():
-                logit = classifier(embedding).squeeze(1)
-                probability = torch.sigmoid(logit)
-                prediction = (probability >= 0.5).float()
-
-            all_predictions.append(prediction.cpu())
-            all_labels.append(
-                torch.tensor([label], dtype=torch.float32)
+            # CLIP preprocessing
+            image_tensor = (
+                spatial.preprocess(image)
+                .unsqueeze(0)
             )
 
-        predictions = torch.cat(all_predictions)
-        labels = torch.cat(all_labels)
+            with torch.no_grad():
+                embedding = spatial.encode(
+                    image_tensor
+                )
 
-        metrics = evaluate_predictions(
+                embedding = F.normalize(
+                    embedding.float(),
+                    dim=1,
+                )
+
+                embedding = embedding.to(device)
+
+                logit = classifier(
+                    embedding
+                ).squeeze(1)
+
+                probability = torch.sigmoid(
+                    logit
+                )
+
+                prediction = (
+                    probability >= 0.5
+                ).float()
+
+            all_predictions.append(
+                prediction.cpu()
+            )
+
+            all_probabilities.append(
+                probability.cpu()
+            )
+
+            all_labels.append(
+                torch.tensor(
+                    [label],
+                    dtype=torch.float32,
+                )
+            )
+
+        predictions = torch.cat(
+            all_predictions
+        )
+
+        probabilities = torch.cat(
+            all_probabilities
+        )
+
+        labels = torch.cat(
+            all_labels
+        )
+
+        return evaluate_predictions(
             predictions,
+            probabilities,
             labels,
         )
 
-        return metrics
-
     # ---------------------------------------------------------
-    # 5. Clean baseline
+    # 5. Clean + transformations
     # ---------------------------------------------------------
     results = {}
 
@@ -172,9 +224,6 @@ def main():
         transform_fn=None,
     )
 
-    # ---------------------------------------------------------
-    # 6. All transformation conditions
-    # ---------------------------------------------------------
     for name, transform_fn in EVALUATION_TRANSFORMS.items():
         results[name] = run_condition(
             name,
@@ -185,26 +234,133 @@ def main():
         results[name] = run_condition(
             name,
             transform_fn,
-    )
+        )
+
     # ---------------------------------------------------------
-    # 7. Print summary
+    # 6. Print summary
     # ---------------------------------------------------------
     clean_accuracy = results["clean"]["accuracy"]
 
-    print("\nV0 ROBUSTNESS RESULTS")
-    print("--------------------------------------------------")
-    print(f"{'Condition':<18} {'Accuracy':>10} {'Drop':>10}")
-    print("--------------------------------------------------")
+    print("\nV0 SPATIAL ROBUSTNESS RESULTS")
+    print("-" * 64)
+
+    print(
+        f"{'Condition':<22}"
+        f"{'Accuracy':>10}"
+        f"{'Drop':>10}"
+        f"{'AUC':>10}"
+    )
+
+    print("-" * 64)
 
     for name, metrics in results.items():
         accuracy = metrics["accuracy"]
         drop = clean_accuracy - accuracy
+        auc = metrics["auc"]
 
         print(
-            f"{name:<18} "
-            f"{accuracy:>10.3f} "
+            f"{name:<22}"
+            f"{accuracy:>10.3f}"
             f"{drop:>10.3f}"
+            f"{auc:>10.4f}"
         )
+
+    # ---------------------------------------------------------
+    # 7. Summary scores
+    # ---------------------------------------------------------
+    clean_auc = results["clean"]["auc"]
+
+    transformed_aucs = [
+        metrics["auc"]
+        for name, metrics in results.items()
+        if name != "clean"
+    ]
+
+    avg_robust_auc = (
+        sum(transformed_aucs)
+        / len(transformed_aucs)
+    )
+
+    final_score = (
+        0.5 * clean_auc
+        + 0.5 * avg_robust_auc
+    )
+
+    print("\nclean AUC:      ", f"{clean_auc:.4f}")
+    print("avg robust AUC: ", f"{avg_robust_auc:.4f}")
+    print("final score:    ", f"{final_score:.4f}")
+
+    # ---------------------------------------------------------
+    # 8. Save results
+    # ---------------------------------------------------------
+    results_dir = Path("results")
+
+    results_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    output_path = (
+        results_dir
+        / "v0_robustness.txt"
+    )
+
+    with open(output_path, "w") as f:
+        f.write("V0 Spatial-Only Baseline\n")
+        f.write(
+            "Evaluation subset: "
+            "500 CIFAKE test images\n"
+        )
+        f.write("250 REAL / 250 FAKE\n\n")
+
+        f.write(
+            "V0 SPATIAL ROBUSTNESS RESULTS\n"
+        )
+
+        f.write("-" * 64 + "\n")
+
+        f.write(
+            f"{'Condition':<22}"
+            f"{'Accuracy':>10}"
+            f"{'Drop':>10}"
+            f"{'AUC':>10}\n"
+        )
+
+        f.write("-" * 64 + "\n")
+
+        for name, metrics in results.items():
+            accuracy = metrics["accuracy"]
+            drop = clean_accuracy - accuracy
+            auc = metrics["auc"]
+
+            f.write(
+                f"{name:<22}"
+                f"{accuracy:>10.3f}"
+                f"{drop:>10.3f}"
+                f"{auc:>10.4f}\n"
+            )
+
+        f.write("\n")
+
+        f.write(
+            f"clean AUC:       "
+            f"{clean_auc:.4f}\n"
+        )
+
+        f.write(
+            f"avg robust AUC:  "
+            f"{avg_robust_auc:.4f}\n"
+        )
+
+        f.write(
+            f"final score:     "
+            f"{final_score:.4f}\n"
+        )
+
+    print(
+        "\nSaved results to:",
+        output_path,
+    )
 
 
 if __name__ == "__main__":

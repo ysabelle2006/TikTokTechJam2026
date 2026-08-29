@@ -1,13 +1,15 @@
 from pathlib import Path
 
 import torch
-from torch import nn
+import torch.nn.functional as F
 from torchvision.transforms.functional import pil_to_tensor
 from tqdm import tqdm
 from sklearn.metrics import roc_auc_score
 
 from tiktoktechjam2026.data.datasets import CIFAKEDataset
+from tiktoktechjam2026.models.spatial_stream import SpatialStream
 from tiktoktechjam2026.models.frequency_stream import FrequencyStream
+from tiktoktechjam2026.models.fusion import FusionHead
 from tiktoktechjam2026.transforms.augmentations import (
     EVALUATION_TRANSFORMS,
     STACKED_TRANSFORMS,
@@ -58,24 +60,49 @@ def main():
     print("Device:", device)
 
     # ---------------------------------------------------------
-    # 1. Load trained SRM model
+    # 1. Load frozen spatial stream
+    # ---------------------------------------------------------
+    spatial = SpatialStream()
+
+    spatial.model.eval()
+
+    for param in spatial.model.parameters():
+        param.requires_grad = False
+
+    # ---------------------------------------------------------
+    # 2. Load trained SRM frequency stream
     # ---------------------------------------------------------
     frequency = FrequencyStream("srm").to(device)
-    classifier = nn.Linear(128, 1).to(device)
 
-    checkpoint = torch.load(
+    srm_checkpoint = torch.load(
         "checkpoints/v1_srm_best.pt",
         map_location=device,
     )
 
-    frequency.load_state_dict(checkpoint["frequency"])
-    classifier.load_state_dict(checkpoint["classifier"])
+    frequency.load_state_dict(
+        srm_checkpoint["frequency"]
+    )
 
     frequency.eval()
-    classifier.eval()
 
     # ---------------------------------------------------------
-    # 2. Load SAME CIFAKE test set used before
+    # 3. Load trained fusion head
+    # ---------------------------------------------------------
+    fusion = FusionHead().to(device)
+
+    fusion_checkpoint = torch.load(
+        "checkpoints/v1_fusion_best.pt",
+        map_location=device,
+    )
+
+    fusion.load_state_dict(
+        fusion_checkpoint
+    )
+
+    fusion.eval()
+
+    # ---------------------------------------------------------
+    # 4. Load SAME CIFAKE test subset
     # ---------------------------------------------------------
     dataset = CIFAKEDataset(
         "data/CIFAKE",
@@ -107,7 +134,7 @@ def main():
     print("FAKE:", len(fake_indices))
 
     # ---------------------------------------------------------
-    # 3. Evaluate one condition
+    # 5. Evaluate one condition
     # ---------------------------------------------------------
     def run_condition(name, transform_fn=None):
         all_predictions = []
@@ -123,6 +150,29 @@ def main():
             if transform_fn is not None:
                 image = transform_fn(image)
 
+            # ---------------------------------------------
+            # Spatial CLIP branch
+            # ---------------------------------------------
+            spatial_tensor = (
+                spatial.preprocess(image)
+                .unsqueeze(0)
+            )
+
+            with torch.no_grad():
+                spatial_embedding = spatial.encode(
+                    spatial_tensor
+                )
+
+                spatial_embedding = F.normalize(
+                    spatial_embedding.float(),
+                    dim=1,
+                )
+
+            spatial_embedding = spatial_embedding.to(device)
+
+            # ---------------------------------------------
+            # SRM frequency branch
+            # ---------------------------------------------
             image_tensor = (
                 pil_to_tensor(image)
                 .float()
@@ -132,21 +182,51 @@ def main():
             )
 
             with torch.no_grad():
-                embedding, _ = frequency(image_tensor)
+                frequency_embedding, residual_energy = frequency(
+                    image_tensor
+                )
 
-                logit = classifier(embedding).squeeze(1)
+                # -----------------------------------------
+                # Fusion
+                # -----------------------------------------
+                logit = fusion(
+                    spatial_embedding,
+                    frequency_embedding,
+                    residual_energy,
+                ).squeeze(1)
+
                 probability = torch.sigmoid(logit)
-                prediction = (probability >= 0.5).float()
 
-            all_predictions.append(prediction.cpu())
-            all_probabilities.append(probability.cpu())
-            all_labels.append(
-                torch.tensor([label], dtype=torch.float32)
+                prediction = (
+                    probability >= 0.5
+                ).float()
+
+            all_predictions.append(
+                prediction.cpu()
             )
 
-        predictions = torch.cat(all_predictions)
-        probabilities = torch.cat(all_probabilities)
-        labels = torch.cat(all_labels)
+            all_probabilities.append(
+                probability.cpu()
+            )
+
+            all_labels.append(
+                torch.tensor(
+                    [label],
+                    dtype=torch.float32,
+                )
+            )
+
+        predictions = torch.cat(
+            all_predictions
+        )
+
+        probabilities = torch.cat(
+            all_probabilities
+        )
+
+        labels = torch.cat(
+            all_labels
+        )
 
         return evaluate_predictions(
             predictions,
@@ -155,7 +235,7 @@ def main():
         )
 
     # ---------------------------------------------------------
-    # 4. Clean + transformations
+    # 6. Clean + all transformations
     # ---------------------------------------------------------
     results = {}
 
@@ -177,18 +257,20 @@ def main():
         )
 
     # ---------------------------------------------------------
-    # 5. Print summary
+    # 7. Print summary
     # ---------------------------------------------------------
     clean_accuracy = results["clean"]["accuracy"]
 
-    print("\nSRM ROBUSTNESS RESULTS")
+    print("\nV1 FUSION ROBUSTNESS RESULTS")
     print("-" * 64)
+
     print(
         f"{'Condition':<22}"
         f"{'Accuracy':>10}"
         f"{'Drop':>10}"
         f"{'AUC':>10}"
     )
+
     print("-" * 64)
 
     for name, metrics in results.items():
@@ -203,6 +285,9 @@ def main():
             f"{auc:>10.4f}"
         )
 
+    # ---------------------------------------------------------
+    # 8. Summary scores
+    # ---------------------------------------------------------
     clean_auc = results["clean"]["auc"]
 
     transformed_aucs = [
@@ -211,35 +296,56 @@ def main():
         if name != "clean"
     ]
 
-    avg_robust_auc = sum(transformed_aucs) / len(transformed_aucs)
+    avg_robust_auc = (
+        sum(transformed_aucs)
+        / len(transformed_aucs)
+    )
 
-    final_score = 0.5 * clean_auc + 0.5 * avg_robust_auc
+    final_score = (
+        0.5 * clean_auc
+        + 0.5 * avg_robust_auc
+    )
 
     print("\nclean AUC:      ", f"{clean_auc:.4f}")
     print("avg robust AUC: ", f"{avg_robust_auc:.4f}")
     print("final score:    ", f"{final_score:.4f}")
 
     # ---------------------------------------------------------
-    # 6. Save results
+    # 9. Save results
     # ---------------------------------------------------------
     results_dir = Path("results")
-    results_dir.mkdir(parents=True, exist_ok=True)
 
-    output_path = results_dir / "v1_srm_robustness.txt"
+    results_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    output_path = (
+        results_dir
+        / "v1_fusion_robustness.txt"
+    )
 
     with open(output_path, "w") as f:
-        f.write("V1 SRM Frequency-Only Ablation\n")
-        f.write("Evaluation subset: 500 CIFAKE test images\n")
+        f.write("V1 Spatial + SRM Fusion\n")
+        f.write(
+            "Evaluation subset: "
+            "500 CIFAKE test images\n"
+        )
         f.write("250 REAL / 250 FAKE\n\n")
 
-        f.write("SRM ROBUSTNESS RESULTS\n")
+        f.write(
+            "V1 FUSION ROBUSTNESS RESULTS\n"
+        )
+
         f.write("-" * 64 + "\n")
+
         f.write(
             f"{'Condition':<22}"
             f"{'Accuracy':>10}"
             f"{'Drop':>10}"
             f"{'AUC':>10}\n"
         )
+
         f.write("-" * 64 + "\n")
 
         for name, metrics in results.items():
@@ -255,11 +361,23 @@ def main():
             )
 
         f.write("\n")
-        f.write(f"clean AUC:       {clean_auc:.4f}\n")
-        f.write(f"avg robust AUC:  {avg_robust_auc:.4f}\n")
-        f.write(f"final score:     {final_score:.4f}\n")
+        f.write(
+            f"clean AUC:       "
+            f"{clean_auc:.4f}\n"
+        )
+        f.write(
+            f"avg robust AUC:  "
+            f"{avg_robust_auc:.4f}\n"
+        )
+        f.write(
+            f"final score:     "
+            f"{final_score:.4f}\n"
+        )
 
-    print("\nSaved results to:", output_path)
+    print(
+        "\nSaved results to:",
+        output_path,
+    )
 
 
 if __name__ == "__main__":

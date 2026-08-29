@@ -30,9 +30,54 @@ single logit + sigmoid.
 """
 
 
-class FusionHead:
-    def __init__(self):
-        raise NotImplementedError
+import torch
+from torch import nn
 
-    def forward(self, spatial_embedding, frequency_embedding, residual_energy):
-        raise NotImplementedError
+
+class FusionHead(nn.Module):
+    """
+    V1 fusion head.
+
+    Inputs:
+        spatial_embedding:   [B, 512]
+        frequency_embedding: [B, 128]
+        residual_energy:     [B, 1]
+
+    Combined:
+        512 + 128 + 1 = 641 dimensions
+
+    Output:
+        logits: [B, 1]
+    """
+
+    def __init__(self):
+        super().__init__()
+
+        self.fusion = nn.Sequential(
+            nn.Linear(641, 256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+
+            nn.Linear(256, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+
+            nn.Linear(64, 1),
+        )
+
+    def forward(
+        self,
+        spatial_embedding,
+        frequency_embedding,
+        residual_energy,
+    ):
+        x = torch.cat(
+            [
+                spatial_embedding,
+                frequency_embedding,
+                residual_energy,
+            ],
+            dim=1,
+        )
+
+        return self.fusion(x)
