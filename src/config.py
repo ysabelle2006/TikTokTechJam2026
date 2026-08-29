@@ -9,15 +9,21 @@ hunting through every module later.
 IMAGE_SIZE = 224
 
 # Spatial stream
-SPATIAL_BACKBONE = "ViT-B-32"   # open_clip model name
+SPATIAL_BACKBONE = "ViT-B-32-quickgelu"   # open_clip model name
 SPATIAL_PRETRAINED = "openai"   # open_clip pretrained tag
 SPATIAL_EMBED_DIM = 512
 FREEZE_BACKBONE = True          # flip to False (or partial) once we try fine-tuning (V4)
 
 # Frequency stream -- deliberately not committed to one extraction method yet.
 # Run both as an ablation (see README roadmap) before picking a default.
-FREQUENCY_MODE = "srm"          # "srm" (high-pass residual) or "fft" (log-magnitude spectrum)
+FREQUENCY_MODE = "fft"          # "srm" (high-pass residual) or "fft" (log-magnitude spectrum)
 FREQUENCY_EMBED_DIM = 128
+
+# Side length (pixels) prepare_frequency_input resizes its grayscale
+# residual/spectrum map to before it reaches the frequency stream's
+# CNN. Independent of IMAGE_SIZE / CLIP's own input size -- the two
+# streams see the same source image through different eyes.
+FREQUENCY_INPUT_SIZE = 224
 
 # Fusion
 FUSION_INPUT_DIM = SPATIAL_EMBED_DIM + FREQUENCY_EMBED_DIM + 1  # +1 = residual-energy scalar
