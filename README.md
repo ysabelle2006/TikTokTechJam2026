@@ -87,7 +87,48 @@ regular terminal if it fails in a sandboxed shell.)
 
 ## Reproducing results
 
-TODO -- fill in once train.py and evaluate.py are implemented.
+V0 and V1 are implemented. Both train a small head on a **frozen** CLIP
+ViT-B/32 backbone, on the SID_Set `real` vs `full_synthetic` split
+(deterministic 80/10/10, `config.SEED`). All transform parameters,
+embedding dims, paths and the evaluation grid live in
+`src/tiktoktechjam2026/config.py`.
+
+```bash
+# 0. fetch training data (real, multi-GB -- run from a normal terminal)
+python downloads.py --sid --sid-cap 8000
+
+# 1. build the deterministic train/val/test split
+python -m tiktoktechjam2026.data.datasets --build
+
+# 2. precompute frozen-CLIP embeddings (the CPU bottleneck) + V1 frequency
+#    inputs. ~30 min on 8 CPU threads. train/val: clean only; test: all 15
+#    robustness conditions.
+python -m tiktoktechjam2026.cache_embeddings
+
+# 3. V0 -- spatial stream only
+python -m tiktoktechjam2026.train    --variant v0
+python -m tiktoktechjam2026.evaluate --variant v0      # -> results/v0.json
+
+# 4. V1 -- + frequency stream (SRM residual + CNN + residual-energy scalar)
+python -m tiktoktechjam2026.train    --variant v1
+python -m tiktoktechjam2026.evaluate --variant v1      # -> results/v1.json
+```
+
+`evaluate.py` prints the per-condition robustness table (Accuracy / Drop /
+AUC) and writes it to `results/v{0,1}.json` -- one file per stage, never
+overwritten.
+
+Deliverable inference:
+
+```bash
+python -m tiktoktechjam2026.infer --images <dir> --variant v1 --out preds.json
+```
+
+Robustness transforms (`config.EVAL_CONDITIONS`) are applied to the raw
+image at native resolution, before either stream's preprocessing; CLIP
+normalization and the frequency residual are always recomputed from the
+transformed pixels. Frequency-mode ablation (`srm` vs `fft`):
+`train.py --variant v1 --freq-mode fft`.
 
 ## Limitations & what we'd improve with more time
 
