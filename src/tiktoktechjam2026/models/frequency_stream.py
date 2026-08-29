@@ -36,10 +36,11 @@ import torch.nn.functional as F
 
 class FrequencyStream(nn.Module):
     """
-    SRM-style frequency / forensic stream.
+    Frequency / forensic stream.
 
-    Input:
-        image tensor of shape [B, 3, H, W], values roughly in [0, 1]
+    Modes:
+        "srm" -> fixed high-pass residual filters
+        "fft" -> log-magnitude FFT spectrum
 
     Output:
         embedding:       [B, 128]
@@ -49,16 +50,14 @@ class FrequencyStream(nn.Module):
     def __init__(self, mode: str = "srm"):
         super().__init__()
 
-        if mode != "srm":
-            raise ValueError("This implementation currently supports mode='srm' only.")
+        if mode not in {"srm", "fft"}:
+            raise ValueError("mode must be 'srm' or 'fft'")
 
         self.mode = mode
 
         # ---------------------------------------------------------
-        # 1. Fixed SRM-style high-pass filters
+        # SRM kernels
         # ---------------------------------------------------------
-
-        # Horizontal / vertical local differences
         k1 = torch.tensor([
             [0.0,  0.0,  0.0],
             [0.0, -1.0,  1.0],
@@ -71,36 +70,57 @@ class FrequencyStream(nn.Module):
             [0.0,  1.0,  0.0],
         ])
 
-        # Laplacian-style high-pass filter
         k3 = torch.tensor([
             [0.0, -1.0,  0.0],
             [-1.0, 4.0, -1.0],
             [0.0, -1.0,  0.0],
         ])
 
-        kernels = torch.stack([k1, k2, k3], dim=0).unsqueeze(1)
+        kernels = torch.stack(
+            [k1, k2, k3],
+            dim=0
+        ).unsqueeze(1)
 
-        # Fixed filters: not trainable
-        self.register_buffer("srm_kernels", kernels)
+        self.register_buffer(
+            "srm_kernels",
+            kernels
+        )
 
         # ---------------------------------------------------------
-        # 2. Small CNN over residual maps
+        # CNN
         #
-        # Input channels = 3 SRM residual maps
+        # SRM produces 3 channels.
+        # FFT produces 1 channel.
         # ---------------------------------------------------------
+        input_channels = 3 if mode == "srm" else 1
 
         self.cnn = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=3, padding=1),
+            nn.Conv2d(
+                input_channels,
+                32,
+                kernel_size=3,
+                padding=1,
+            ),
             nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
 
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.Conv2d(
+                32,
+                64,
+                kernel_size=3,
+                padding=1,
+            ),
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
 
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.Conv2d(
+                64,
+                128,
+                kernel_size=3,
+                padding=1,
+            ),
             nn.BatchNorm2d(128),
             nn.ReLU(inplace=True),
 
@@ -108,10 +128,6 @@ class FrequencyStream(nn.Module):
         )
 
     def _to_grayscale(self, image):
-        """
-        Convert RGB tensor [B, 3, H, W] -> grayscale [B, 1, H, W].
-        """
-
         if image.dim() == 3:
             image = image.unsqueeze(0)
 
@@ -122,55 +138,89 @@ class FrequencyStream(nn.Module):
         g = image[:, 1:2]
         b = image[:, 2:3]
 
-        gray = 0.299 * r + 0.587 * g + 0.114 * b
+        return (
+            0.299 * r
+            + 0.587 * g
+            + 0.114 * b
+        )
 
-        return gray
-
-    def extract_residuals(self, image):
-        """
-        Apply fixed SRM high-pass filters.
-
-        Returns:
-            residuals: [B, 3, H, W]
-        """
-
+    # ---------------------------------------------------------
+    # SRM
+    # ---------------------------------------------------------
+    def extract_srm(self, image):
         gray = self._to_grayscale(image)
 
         kernels = self.srm_kernels.to(
             device=gray.device,
-            dtype=gray.dtype
+            dtype=gray.dtype,
         )
 
-        residuals = F.conv2d(
+        return F.conv2d(
             gray,
             kernels,
-            padding=1
+            padding=1,
         )
 
-        return residuals
+    # ---------------------------------------------------------
+    # FFT
+    # ---------------------------------------------------------
+    def extract_fft(self, image):
+        gray = self._to_grayscale(image)
+
+        # 2-D FFT
+        fft = torch.fft.fft2(
+            gray,
+            dim=(-2, -1),
+        )
+
+        # Move low frequencies to centre
+        fft = torch.fft.fftshift(
+            fft,
+            dim=(-2, -1),
+        )
+
+        magnitude = torch.abs(fft)
+
+        # Compress huge FFT value range
+        spectrum = torch.log1p(magnitude)
+
+        # Normalize each image independently
+        mean = spectrum.mean(
+            dim=(-2, -1),
+            keepdim=True,
+        )
+
+        std = spectrum.std(
+            dim=(-2, -1),
+            keepdim=True,
+        )
+
+        spectrum = (
+            spectrum - mean
+        ) / (std + 1e-6)
+
+        return spectrum
 
     def encode(self, image):
-        """
-        Returns:
-            embedding:       [B, 128]
-            residual_energy: [B, 1]
-        """
+        if self.mode == "srm":
+            features = self.extract_srm(image)
 
-        residuals = self.extract_residuals(image)
+            energy = features.abs().mean(
+                dim=(1, 2, 3)
+            ).unsqueeze(1)
 
-        # Mean absolute high-frequency energy.
-        # This gives fusion an explicit clue about how much
-        # forensic/high-frequency signal remains in the image.
-        residual_energy = residuals.abs().mean(
-            dim=(1, 2, 3),
-            keepdim=False
-        ).unsqueeze(1)
+        else:
+            features = self.extract_fft(image)
 
-        features = self.cnn(residuals)
+            # Mean absolute normalized spectral response
+            energy = features.abs().mean(
+                dim=(1, 2, 3)
+            ).unsqueeze(1)
 
-        embedding = features.flatten(1)
+        embedding = self.cnn(features)
+        embedding = embedding.flatten(1)
 
-        return embedding, residual_energy
+        return embedding, energy
 
     def forward(self, image):
         return self.encode(image)

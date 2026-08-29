@@ -1,0 +1,29 @@
+V1 FFT Frequency-Only Ablation
+Evaluation subset: 500 CIFAKE test images
+250 REAL / 250 FAKE
+
+FFT ROBUSTNESS RESULTS
+----------------------------------------------------
+Condition               Accuracy      Drop
+----------------------------------------------------
+clean                      0.834     0.000
+jpeg_90                    0.816     0.018
+jpeg_70                    0.814     0.020
+jpeg_50                    0.682     0.152
+jpeg_30                    0.728     0.106
+blur_0.5                   0.556     0.278
+blur_1.0                   0.502     0.332
+blur_2.0                   0.506     0.328
+resize_0.5                 0.504     0.330
+resize_0.25                0.508     0.326
+noise_0.02                 0.728     0.106
+noise_0.05                 0.510     0.324
+noise_0.10                 0.500     0.334
+jitter_0.8                 0.774     0.060
+jitter_1.2                 0.770     0.064
+crop_0.8                   0.508     0.326
+jpeg30_resize025           0.512     0.322
+blur2_jpeg50               0.504     0.330
+resize025_noise010         0.500     0.334
+crop08_jpeg70              0.532     0.302
+blur1_resize05_jpeg50      0.504     0.330
