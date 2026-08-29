@@ -48,7 +48,7 @@ def main():
 
     # Load full cached CIFAKE training embeddings
     cache = torch.load(
-        "results/v0/train_embeddings_full.pt",
+        "results/v2/train_embeddings_augmented.pt",
         map_location="cpu"
     )
 
@@ -95,10 +95,10 @@ def main():
 
     epochs = 20
 
-    checkpoint_dir = Path("results/v0")
+    checkpoint_dir = Path("results/v2")
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    checkpoint_path = checkpoint_dir / "v0_classifier_best.pt"
+    checkpoint_path = checkpoint_dir / "v2_classifier_best.pt"
 
     best_val_accuracy = 0.0
     best_epoch = 0

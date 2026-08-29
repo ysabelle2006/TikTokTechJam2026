@@ -44,8 +44,8 @@ from tiktoktechjam2026.transforms.augmentations import (
 
 
 TEST_DIR = "data/cifake/test"
-CHECKPOINT = "results/v0/v0_classifier_best.pt"
-OUTPUT_FILE = "results/v0_robustness.json"
+CHECKPOINT = "results/v2/v2_classifier_best.pt"
+OUTPUT_FILE = "results/v2_robustness.json"
 
 
 def fixed_color_jitter(image):
@@ -277,7 +277,7 @@ def main():
 
     print()
     print("=" * 72)
-    print("V0 ROBUSTNESS SUMMARY")
+    print("V2 ROBUSTNESS SUMMARY")
     print("=" * 72)
 
     print(

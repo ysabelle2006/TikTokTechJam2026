@@ -28,6 +28,10 @@ models/spatial_stream.py exist.
 
 from pathlib import Path
 
+import random 
+import numpy as np 
+from tiktoktechjam2026.transforms.augmentations import random_transform
+
 import torch
 from torch.utils.data import DataLoader, Subset
 
@@ -39,11 +43,17 @@ from tiktoktechjam2026.transforms.preprocessing import prepare_spatial_input
 def main(
     image_dir: str,
     cache_file: str,
-    max_samples: int = 100
+    max_samples=None,
+    augmentation=None,
+    seed: int = 42,
 ):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
     dataset = AIGCFolderDataset(
         root_dir=image_dir,
-        augmentation=None,
+        augmentation=augmentation,
         transform=prepare_spatial_input
     )
 
@@ -118,7 +128,9 @@ def main(
 
 if __name__ == "__main__":
     main(
-        image_dir="data/cifake/test",
-        cache_file="results/v0/test_embeddings_clean.pt",
-        max_samples=None
+        image_dir="data/cifake/train",
+        cache_file="results/v2/train_embeddings_augmented.pt",
+        max_samples=None,
+        augmentation=random_transform,
+        seed=42
     )
