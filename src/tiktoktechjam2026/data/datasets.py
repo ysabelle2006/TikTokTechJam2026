@@ -13,3 +13,48 @@ implement a dataset class per source with a consistent (image, label)
 interface, plus a generator_family field so we can later hold one
 family out for the generalization test.
 """
+
+from pathlib import Path
+
+from torch.utils.data import Dataset
+from torchvision.datasets import ImageFolder
+
+
+class CIFAKEDataset(Dataset):
+    """
+    CIFAKE dataset wrapper.
+
+    Returns:
+        image: PIL image, or transformed tensor if a transform is provided
+        label: 0 for REAL, 1 for AI/FAKE
+    """
+
+    def __init__(self, root, split="train", transform=None):
+        split_dir = Path(root) / split
+
+        if not split_dir.exists():
+            raise FileNotFoundError(
+                f"Could not find CIFAKE split at: {split_dir}"
+            )
+
+        self.dataset = ImageFolder(
+            root=split_dir,
+            transform=transform,
+        )
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        image, original_label = self.dataset[index]
+
+        class_name = self.dataset.classes[original_label]
+
+        if class_name.upper() == "REAL":
+            label = 0
+        elif class_name.upper() == "FAKE":
+            label = 1
+        else:
+            raise ValueError(f"Unexpected CIFAKE class: {class_name}")
+
+        return image, label

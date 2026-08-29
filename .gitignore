@@ -1,0 +1,14 @@
+
+# Datasets / generated files
+data/
+cache/
+checkpoints/
+
+# Python generated files
+__pycache__/
+*.pyc
+
+# Environment
+.venv/
+venv/
+.env

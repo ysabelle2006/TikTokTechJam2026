@@ -18,10 +18,36 @@ parameters by default (config.FREEZE_BACKBONE), expose
 encode(image_tensor) -> 512-d embedding.
 """
 
+import torch
+import open_clip
+
+from tiktoktechjam2026 import config
+
 
 class SpatialStream:
     def __init__(self, freeze: bool = True):
-        raise NotImplementedError
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
+
+        self.model, _, self.preprocess = open_clip.create_model_and_transforms(
+            config.SPATIAL_BACKBONE,
+            pretrained=config.SPATIAL_PRETRAINED,
+        )
+
+        self.model = self.model.to(self.device)
+
+        if freeze:
+            for param in self.model.parameters():
+                param.requires_grad = False
+
+        self.model.eval()
 
     def encode(self, image_tensor):
-        raise NotImplementedError
+        image_tensor = image_tensor.to(self.device)
+
+        with torch.no_grad():
+            embedding = self.model.encode_image(image_tensor)
+
+        return embedding.float()
+
