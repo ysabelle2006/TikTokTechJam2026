@@ -32,12 +32,73 @@ import os
 
 import numpy as np
 import torch
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, roc_curve
 
 from tiktoktechjam2026 import config
 from tiktoktechjam2026.cache_embeddings import load_cache, render_condition
 from tiktoktechjam2026.data.datasets import SidDataset
 from tiktoktechjam2026.models.detector import Detector
+
+# --------------------------------------------------------------------------
+# Acc@opt -- reported alongside Acc@0.5 for every condition.
+#
+# The 0.5 threshold is fixed and dataset-agnostic; Acc@opt fits one scalar
+# (the decision threshold) to maximise F1 on a random 50% "calibration" split
+# of THIS condition's images, then scores the held-out 50%.
+#
+# On in-distribution SID this barely moves off 0.5 -- the model is
+# well-calibrated in-domain (confidence-ECE ~0.006) -- so Acc@opt ~= Acc@0.5
+# here and the column mostly serves as a calibration check. Acc@opt only
+# becomes interesting for OUT-of-distribution evaluation
+# (evaluate_crossdataset.py), where it is a *calibrated-on-target* number:
+# an upper bound on deployable transfer if you were allowed to tune one
+# threshold on the target domain -- NOT a zero-shot transfer metric. The
+# zero-shot numbers are Acc@0.5 and AUC.
+THRESHOLD_NOTE = (
+    "Acc@opt = threshold that maximises balanced accuracy, fit on a random "
+    "50% split of each condition and scored on the other 50%. In-domain "
+    "Acc@opt ~= Acc@0.5 (model is calibrated); the fitted threshold itself "
+    "wanders because the objective is flat across a wide range near the "
+    "accuracy ceiling. Acc@opt matters off-domain as a calibrated-on-target "
+    "upper bound -- it is NOT a zero-shot metric. Zero-shot = Acc@0.5 / AUC."
+)
+
+
+def optimal_threshold(y_true, y_score):
+    """
+    (threshold, balanced_accuracy) maximising balanced accuracy == Youden's J.
+
+    Candidate thresholds come from the ROC curve (every distinct score),
+    not a fixed 0..1 grid: under a severe distribution shift the whole score
+    mass can sit below 0.01, and a coarse grid would never find the real
+    operating point. Balanced accuracy (not F1) because the reported metric
+    is accuracy and the test sets are class-balanced.
+    """
+    if len(np.unique(y_true)) < 2:
+        return 0.5, float("nan")
+    fpr, tpr, thr = roc_curve(y_true, y_score)
+    j = int(np.argmax(tpr - fpr))
+    t = float(thr[j])
+    if not np.isfinite(t):                      # sklearn puts +inf at index 0
+        t = 1.0
+    return t, float((tpr[j] + (1.0 - fpr[j])) / 2.0)
+
+
+def calibrated_accuracy(probs, labels, seed):
+    """
+    (acc_on_eval_half, threshold). Fit the threshold on a random 50%
+    calibration split, score the held-out 50%. Falls back to 0.5 if the
+    calibration half is degenerate (one class / too small).
+    """
+    n = len(labels)
+    perm = np.random.default_rng(seed).permutation(n)
+    calib, ev = perm[: n // 2], perm[n // 2:]
+    if len(calib) >= 2 and len(np.unique(labels[calib])) == 2:
+        thr, _ = optimal_threshold(labels[calib], probs[calib])
+    else:
+        thr = 0.5
+    acc = float(((probs[ev] >= thr).astype(int) == labels[ev]).mean())
+    return acc, float(thr)
 
 
 @torch.no_grad()
@@ -84,12 +145,18 @@ def evaluate(variant: str, batch_size: int = None, out_json: str = None):
             )
 
     rows = {}
-    for key, _, _ in config.EVAL_CONDITIONS:
+    for i, (key, _, _) in enumerate(config.EVAL_CONDITIONS):
         probs, labels, _ = _probs_for_condition(detector, key, batch_size, paths=paths)
         preds = (probs >= 0.5).astype(int)
         acc = float((preds == labels).mean())
         auc = float(roc_auc_score(labels, probs)) if len(np.unique(labels)) > 1 else float("nan")
-        rows[key] = {"accuracy": acc, "auc": auc}
+        acc_opt, thr_opt = calibrated_accuracy(probs, labels, seed=config.SEED + i)
+        rows[key] = {
+            "accuracy": acc,               # Acc@0.5 (unchanged key, for backwards compat)
+            "accuracy_at_opt": acc_opt,
+            "opt_threshold": thr_opt,
+            "auc": auc,
+        }
 
     clean_acc = rows["clean"]["accuracy"]
     for key in rows:
@@ -103,15 +170,17 @@ def evaluate(variant: str, batch_size: int = None, out_json: str = None):
 def _print_table(variant: str, rows: dict):
     title = f"{variant.upper()} ROBUSTNESS SUMMARY"
     print("\n" + title)
-    print("=" * 72)
-    print(f"{'Condition':<22}{'Accuracy':>12}{'Drop':>12}{'AUC':>12}")
-    print("-" * 72)
+    print("=" * 78)
+    print(f"{'Condition':<20}{'Acc@0.5':>10}{'Drop':>10}{'Acc@opt':>10}{'Thr':>8}{'AUC':>10}")
+    print("-" * 78)
     for key, _, _ in config.EVAL_CONDITIONS:
         r = rows[key]
-        print(f"{key:<22}{r['accuracy']*100:>11.2f}%{r['drop']*100:>11.2f}%{r['auc']:>12.4f}")
-    print("-" * 72)
+        print(f"{key:<20}{r['accuracy']*100:>9.2f}%{r['drop']*100:>9.2f}%"
+              f"{r['accuracy_at_opt']*100:>9.2f}%{r['opt_threshold']:>8.2f}{r['auc']:>10.4f}")
+    print("-" * 78)
     drops = [rows[k]["drop"] for k, _, _ in config.EVAL_CONDITIONS if k != "clean"]
-    print(f"{'avg transformed drop':<22}{'':>12}{np.mean(drops)*100:>11.2f}%")
+    print(f"{'avg transformed drop':<20}{'':>10}{np.mean(drops)*100:>9.2f}%")
+    print(f"\n{THRESHOLD_NOTE}")
 
 
 def _write_json(variant, out_json, rows, detector, n_test):
@@ -128,12 +197,17 @@ def _write_json(variant, out_json, rows, detector, n_test):
         "n_test": int(n_test),
         "generated_at": dt.datetime.now().isoformat(timespec="seconds"),
         "checkpoint_meta": meta,
+        "threshold_note": THRESHOLD_NOTE,
         "clean_accuracy": rows["clean"]["accuracy"],
+        "clean_accuracy_at_opt": rows["clean"]["accuracy_at_opt"],
         "clean_auc": rows["clean"]["auc"],
         "avg_transformed_drop": float(np.mean(drops)),
         "conditions": {
             key: {
                 "accuracy": rows[key]["accuracy"],
+                "accuracy_at_0.5": rows[key]["accuracy"],
+                "accuracy_at_opt": rows[key]["accuracy_at_opt"],
+                "opt_threshold": rows[key]["opt_threshold"],
                 "drop": rows[key]["drop"],
                 "auc": rows[key]["auc"],
             }

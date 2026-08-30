@@ -3,7 +3,7 @@
   "freq_mode": null,
   "dataset": "SID_Set (real vs full_synthetic)",
   "n_test": 1600,
-  "generated_at": "2026-08-29T14:25:36",
+  "generated_at": "2026-08-30T02:11:25",
   "checkpoint_meta": {
     "variant": "v0",
     "freq_mode": "srm",
@@ -15,82 +15,129 @@
     "lr": 0.001,
     "n_train": 12800
   },
+  "threshold_note": "Acc@opt = threshold that maximises balanced accuracy, fit on a random 50% split of each condition and scored on the other 50%. In-domain Acc@opt ~= Acc@0.5 (model is calibrated); the fitted threshold itself wanders because the objective is flat across a wide range near the accuracy ceiling. Acc@opt matters off-domain as a calibrated-on-target upper bound -- it is NOT a zero-shot metric. Zero-shot = Acc@0.5 / AUC.",
   "clean_accuracy": 0.993125,
+  "clean_accuracy_at_opt": 0.99375,
   "clean_auc": 0.9995812500000001,
   "avg_transformed_drop": 0.01763392857142861,
   "conditions": {
     "clean": {
       "accuracy": 0.993125,
+      "accuracy_at_0.5": 0.993125,
+      "accuracy_at_opt": 0.99375,
+      "opt_threshold": 0.9483119249343872,
       "drop": 0.0,
       "auc": 0.9995812500000001
     },
     "jpeg_q90": {
       "accuracy": 0.993125,
+      "accuracy_at_0.5": 0.993125,
+      "accuracy_at_opt": 0.98625,
+      "opt_threshold": 0.9249763488769531,
       "drop": 0.0,
       "auc": 0.9995734375
     },
     "jpeg_q70": {
       "accuracy": 0.9925,
+      "accuracy_at_0.5": 0.9925,
+      "accuracy_at_opt": 0.9925,
+      "opt_threshold": 0.7197115421295166,
       "drop": 0.0006249999999999867,
       "auc": 0.9996453125
     },
     "jpeg_q50": {
       "accuracy": 0.991875,
+      "accuracy_at_0.5": 0.991875,
+      "accuracy_at_opt": 0.99375,
+      "opt_threshold": 0.12419639527797699,
       "drop": 0.0012500000000000844,
       "auc": 0.9997765625
     },
     "jpeg_q30": {
       "accuracy": 0.98125,
+      "accuracy_at_0.5": 0.98125,
+      "accuracy_at_opt": 0.98875,
+      "opt_threshold": 0.05372703820466995,
       "drop": 0.01187500000000008,
       "auc": 0.9994515625
     },
     "blur_0.5": {
       "accuracy": 0.993125,
+      "accuracy_at_0.5": 0.993125,
+      "accuracy_at_opt": 0.99125,
+      "opt_threshold": 0.21955765783786774,
       "drop": 0.0,
       "auc": 0.999575
     },
     "blur_1.0": {
       "accuracy": 0.993125,
+      "accuracy_at_0.5": 0.993125,
+      "accuracy_at_opt": 0.995,
+      "opt_threshold": 0.8287295699119568,
       "drop": 0.0,
       "auc": 0.999559375
     },
     "blur_2.0": {
       "accuracy": 0.994375,
+      "accuracy_at_0.5": 0.994375,
+      "accuracy_at_opt": 0.99375,
+      "opt_threshold": 0.518966019153595,
       "drop": -0.0012499999999999734,
       "auc": 0.999553125
     },
     "resize_0.5": {
       "accuracy": 0.99375,
+      "accuracy_at_0.5": 0.99375,
+      "accuracy_at_opt": 0.99125,
+      "opt_threshold": 0.5083683133125305,
       "drop": -0.0006249999999999867,
       "auc": 0.9995484375
     },
     "resize_0.25": {
       "accuracy": 0.99375,
+      "accuracy_at_0.5": 0.99375,
+      "accuracy_at_opt": 0.98875,
+      "opt_threshold": 0.5666782855987549,
       "drop": -0.0006249999999999867,
       "auc": 0.9995609375000001
     },
     "noise_0.02": {
       "accuracy": 0.98,
+      "accuracy_at_0.5": 0.98,
+      "accuracy_at_opt": 0.995,
+      "opt_threshold": 0.023953286930918694,
       "drop": 0.013125000000000053,
       "auc": 0.99954375
     },
     "noise_0.05": {
       "accuracy": 0.906875,
+      "accuracy_at_0.5": 0.906875,
+      "accuracy_at_opt": 0.97875,
+      "opt_threshold": 0.00048245961079373956,
       "drop": 0.08625000000000005,
       "auc": 0.9983375
     },
     "noise_0.10": {
       "accuracy": 0.861875,
+      "accuracy_at_0.5": 0.861875,
+      "accuracy_at_opt": 0.97375,
+      "opt_threshold": 1.10448827399523e-05,
       "drop": 0.1312500000000001,
       "auc": 0.9978640625
     },
     "color_jitter_20": {
       "accuracy": 0.991875,
+      "accuracy_at_0.5": 0.991875,
+      "accuracy_at_opt": 0.98125,
+      "opt_threshold": 0.9488033652305603,
       "drop": 0.0012500000000000844,
       "auc": 0.9995093750000001
     },
     "crop_0.8": {
       "accuracy": 0.989375,
+      "accuracy_at_0.5": 0.989375,
+      "accuracy_at_opt": 0.99,
+      "opt_threshold": 0.40904173254966736,
       "drop": 0.003750000000000031,
       "auc": 0.9994015625000001
     }

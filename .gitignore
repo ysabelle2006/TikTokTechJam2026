@@ -12,6 +12,14 @@ __pycache__/
 data/
 cache/
 checkpoints/
-cache_build.log
+
+# Run logs
+*.log
+
+# Diagnostic-suite output (regenerate with trust_checks.py)
+diagnostics/
+
+# Raw per-image prediction dumps (regenerate with evaluate_crossdataset.py)
+results/*.npz
 
 # Results JSONs ARE committed (one per roadmap stage) -- do not ignore results/*.json
