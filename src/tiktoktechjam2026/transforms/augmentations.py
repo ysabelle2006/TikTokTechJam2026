@@ -1,223 +1,275 @@
 """
-Train-time robustness augmentations.
+Train-time / test-time robustness transforms.
 
-Implements the exact transform families and parameter ranges from the
-challenge brief (section 5.2), applied randomly during training so the
-model learns to stay accurate after the same real-world post-processing
-the organizers will test against:
+Implements the exact transform families and parameter grid from the
+challenge brief:
 
-    JPEG compression   quality in {90, 70, 50, 30}
-    Gaussian blur      sigma in {0.5, 1.0, 2.0}
+    JPEG Compression   quality in {90, 70, 50, 30}
+    Gaussian Blur      sigma in {0.5, 1.0, 2.0}
     Resize             scale 0.5x or 0.25x, then upscale back
-    Gaussian noise     sigma in {0.02, 0.05, 0.10}
-    Color jitter       brightness/contrast/saturation +/- 20%
-    Center crop        crop to 80%, then resize back
+    Gaussian Noise     sigma in {0.02, 0.05, 0.10}
+    Color Jitter       brightness/contrast/saturation +/- 20%
+    Center Crop        crop to 80%, then resize back
 
-TODO (next step): implement each function against a PIL.Image or numpy
-array, plus a random_transform(image) dispatcher that applies zero or
-more of these per call -- the brief tests "a subset" of these, not
-necessarily all stacked together every time.
+Also defines four stacked conditions for V2-style robustness evaluation.
 """
 
-
 import io
+import random
 
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
 
 
-# ---------------------------------------------------------
-# JPEG compression
-# quality = 90, 70, 50, 30
-# ---------------------------------------------------------
-def jpeg_compression(image, quality):
+JPEG_QUALITIES = (90, 70, 50, 30)
+BLUR_SIGMAS = (0.5, 1.0, 2.0)
+RESIZE_SCALES = (0.5, 0.25)
+NOISE_SIGMAS = (0.02, 0.05, 0.10)
+COLOR_JITTER_RANGE = 0.2
+CROP_FRACTION = 0.8
+
+
+def jpeg_compress(image: Image.Image, quality: int) -> Image.Image:
     buffer = io.BytesIO()
-
-    image.convert("RGB").save(
-        buffer,
-        format="JPEG",
-        quality=quality,
-    )
-
+    image.convert("RGB").save(buffer, format="JPEG", quality=quality)
     buffer.seek(0)
-
-    compressed = Image.open(buffer).convert("RGB")
-    compressed.load()
-
-    return compressed
+    return Image.open(buffer).convert("RGB")
 
 
-# ---------------------------------------------------------
-# Gaussian blur
-# sigma = 0.5, 1.0, 2.0
-# ---------------------------------------------------------
-def gaussian_blur(image, sigma):
-    return image.filter(
-        ImageFilter.GaussianBlur(radius=sigma)
-    )
+def gaussian_blur(image: Image.Image, sigma: float) -> Image.Image:
+    return image.filter(ImageFilter.GaussianBlur(radius=sigma))
 
 
-# ---------------------------------------------------------
-# Resize
-# scale = 0.5 or 0.25, then upscale back
-# ---------------------------------------------------------
-def resize_transform(image, scale):
-    original_width, original_height = image.size
-
-    small_width = max(1, int(original_width * scale))
-    small_height = max(1, int(original_height * scale))
+def resize_roundtrip(image: Image.Image, scale: float) -> Image.Image:
+    w, h = image.size
 
     small = image.resize(
-        (small_width, small_height),
-        Image.Resampling.BILINEAR,
+        (
+            max(1, round(w * scale)),
+            max(1, round(h * scale)),
+        ),
+        Image.BICUBIC,
     )
 
-    restored = small.resize(
-        (original_width, original_height),
-        Image.Resampling.BILINEAR,
-    )
-
-    return restored
+    return small.resize((w, h), Image.BICUBIC)
 
 
-# ---------------------------------------------------------
-# Gaussian noise
-# sigma = 0.02, 0.05, 0.10
-#
-# Pixel values are converted to [0, 1], noise is added,
-# then converted back to uint8.
-# ---------------------------------------------------------
-def gaussian_noise(image, sigma, seed=42):
-    array = np.asarray(image.convert("RGB")).astype(
-        np.float32
+def gaussian_noise(image: Image.Image, sigma: float) -> Image.Image:
+    arr = np.asarray(
+        image.convert("RGB"),
+        dtype=np.float32,
     ) / 255.0
 
-    rng = np.random.default_rng(seed)
+    noisy = arr + np.random.normal(
+        0.0,
+        sigma,
+        arr.shape,
+    ).astype(np.float32)
 
-    noise = rng.normal(
-        loc=0.0,
-        scale=sigma,
-        size=array.shape,
+    noisy = np.clip(noisy, 0.0, 1.0)
+
+    return Image.fromarray(
+        (noisy * 255.0).astype(np.uint8),
+        mode="RGB",
     )
 
-    noisy = np.clip(array + noise, 0.0, 1.0)
 
-    noisy = (noisy * 255).astype(np.uint8)
+def color_jitter(
+    image: Image.Image,
+    jitter_range: float = COLOR_JITTER_RANGE,
+    return_factors: bool = False,
+):
+    out = image.convert("RGB")
+    factors = []
 
-    return Image.fromarray(noisy)
+    for enhancer_cls in (
+        ImageEnhance.Brightness,
+        ImageEnhance.Contrast,
+        ImageEnhance.Color,
+    ):
+        factor = 1.0 + random.uniform(
+            -jitter_range,
+            jitter_range,
+        )
 
+        out = enhancer_cls(out).enhance(factor)
+        factors.append(factor)
 
-# ---------------------------------------------------------
-# Color jitter
-# brightness / contrast / saturation +/- 20%
-#
-# factor:
-# 0.8 = -20%
-# 1.2 = +20%
-# ---------------------------------------------------------
-def color_jitter(image, factor):
-    result = image.convert("RGB")
+    if return_factors:
+        return out, tuple(factors)
 
-    result = ImageEnhance.Brightness(result).enhance(
-        factor
-    )
-
-    result = ImageEnhance.Contrast(result).enhance(
-        factor
-    )
-
-    result = ImageEnhance.Color(result).enhance(
-        factor
-    )
-
-    return result
+    return out
 
 
-# ---------------------------------------------------------
-# Center crop
-# keep 80% of image, then resize back
-# ---------------------------------------------------------
-def center_crop(image, crop_fraction=0.8):
-    original_width, original_height = image.size
+def center_crop(
+    image: Image.Image,
+    crop_fraction: float = CROP_FRACTION,
+) -> Image.Image:
+    w, h = image.size
 
-    crop_width = int(original_width * crop_fraction)
-    crop_height = int(original_height * crop_fraction)
+    cw = round(w * crop_fraction)
+    ch = round(h * crop_fraction)
 
-    left = (original_width - crop_width) // 2
-    top = (original_height - crop_height) // 2
-
-    right = left + crop_width
-    bottom = top + crop_height
+    left = (w - cw) // 2
+    top = (h - ch) // 2
 
     cropped = image.crop(
-        (left, top, right, bottom)
+        (
+            left,
+            top,
+            left + cw,
+            top + ch,
+        )
     )
 
-    restored = cropped.resize(
-        (original_width, original_height),
-        Image.Resampling.BILINEAR,
-    )
-
-    return restored
+    return cropped.resize((w, h), Image.BICUBIC)
 
 
 # ---------------------------------------------------------
-# Exact evaluation grid from the challenge brief
+# Named condition registry
 # ---------------------------------------------------------
-EVALUATION_TRANSFORMS = {
-    "jpeg_90": lambda image: jpeg_compression(image, 90),
-    "jpeg_70": lambda image: jpeg_compression(image, 70),
-    "jpeg_50": lambda image: jpeg_compression(image, 50),
-    "jpeg_30": lambda image: jpeg_compression(image, 30),
 
-    "blur_0.5": lambda image: gaussian_blur(image, 0.5),
-    "blur_1.0": lambda image: gaussian_blur(image, 1.0),
-    "blur_2.0": lambda image: gaussian_blur(image, 2.0),
-
-    "resize_0.5": lambda image: resize_transform(image, 0.5),
-    "resize_0.25": lambda image: resize_transform(image, 0.25),
-
-    "noise_0.02": lambda image: gaussian_noise(image, 0.02),
-    "noise_0.05": lambda image: gaussian_noise(image, 0.05),
-    "noise_0.10": lambda image: gaussian_noise(image, 0.10),
-
-    "jitter_0.8": lambda image: color_jitter(image, 0.8),
-    "jitter_1.2": lambda image: color_jitter(image, 1.2),
-
-    "crop_0.8": lambda image: center_crop(image, 0.8),
+SINGLE_CONDITIONS = {
+    "clean": lambda im: im,
 }
 
-STACKED_TRANSFORMS = {
-    "jpeg30_resize025": lambda image:
-        resize_transform(
-            jpeg_compression(image, 30),
+for _q in JPEG_QUALITIES:
+    SINGLE_CONDITIONS[f"jpeg_q{_q}"] = (
+        lambda im, q=_q: jpeg_compress(im, q)
+    )
+
+for _s in BLUR_SIGMAS:
+    SINGLE_CONDITIONS[f"blur_sigma{_s}"] = (
+        lambda im, s=_s: gaussian_blur(im, s)
+    )
+
+for _scale in RESIZE_SCALES:
+    SINGLE_CONDITIONS[f"resize_{_scale}"] = (
+        lambda im, scale=_scale: resize_roundtrip(im, scale)
+    )
+
+for _s in NOISE_SIGMAS:
+    SINGLE_CONDITIONS[f"noise_sigma{_s}"] = (
+        lambda im, s=_s: gaussian_noise(im, s)
+    )
+
+SINGLE_CONDITIONS["color_jitter"] = (
+    lambda im: color_jitter(
+        im,
+        COLOR_JITTER_RANGE,
+    )
+)
+
+SINGLE_CONDITIONS["center_crop"] = (
+    lambda im: center_crop(
+        im,
+        CROP_FRACTION,
+    )
+)
+
+del _q, _s, _scale
+
+
+COMPOUND_CONDITIONS = {
+    "stack_mild": lambda im: jpeg_compress(
+        resize_roundtrip(
+            gaussian_blur(im, 0.5),
+            0.5,
+        ),
+        70,
+    ),
+
+    "stack_moderate": lambda im: jpeg_compress(
+        color_jitter(
+            gaussian_noise(im, 0.05),
+            COLOR_JITTER_RANGE,
+        ),
+        50,
+    ),
+
+    "stack_severe": lambda im: jpeg_compress(
+        resize_roundtrip(
+            gaussian_blur(im, 2.0),
             0.25,
         ),
+        30,
+    ),
 
-    "blur2_jpeg50": lambda image:
-        jpeg_compression(
-            gaussian_blur(image, 2.0),
-            50,
-        ),
-
-    "resize025_noise010": lambda image:
-        gaussian_noise(
-            resize_transform(image, 0.25),
-            0.10,
-        ),
-
-    "crop08_jpeg70": lambda image:
-        jpeg_compression(
-            center_crop(image, 0.8),
-            70,
-        ),
-
-    "blur1_resize05_jpeg50": lambda image:
-        jpeg_compression(
-            resize_transform(
-                gaussian_blur(image, 1.0),
-                0.5,
+    "stack_crop_repost": lambda im: jpeg_compress(
+        gaussian_blur(
+            center_crop(
+                im,
+                CROP_FRACTION,
             ),
-            50,
+            1.0,
         ),
+        50,
+    ),
 }
+
+
+ALL_CONDITIONS = {
+    **SINGLE_CONDITIONS,
+    **COMPOUND_CONDITIONS,
+}
+
+
+def condition_names() -> list:
+    return list(ALL_CONDITIONS.keys())
+
+
+def apply_condition(
+    image: Image.Image,
+    name: str,
+) -> Image.Image:
+    return ALL_CONDITIONS[name](image)
+
+
+def _weighted_sample_without_replacement(
+    items,
+    weights,
+    k,
+    rng: random.Random,
+):
+    items = list(items)
+    weights = list(weights)
+    chosen = []
+
+    for _ in range(min(k, len(items))):
+        total = sum(weights)
+        r = rng.random() * total
+        upto = 0.0
+
+        for i, w in enumerate(weights):
+            upto += w
+
+            if upto >= r:
+                chosen.append(items.pop(i))
+                weights.pop(i)
+                break
+
+    return chosen
+
+
+def sample_condition_names(
+    k: int,
+    rng: random.Random,
+    weight_crop: float = 2.0,
+) -> list:
+    names = [
+        n
+        for n in ALL_CONDITIONS
+        if n != "clean"
+    ]
+
+    weights = [
+        weight_crop if n == "center_crop" else 1.0
+        for n in names
+    ]
+
+    return _weighted_sample_without_replacement(
+        names,
+        weights,
+        k,
+        rng,
+    )

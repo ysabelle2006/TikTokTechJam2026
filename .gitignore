@@ -1,6 +1,6 @@
-
 # Datasets / generated files
 data/
+data_old/
 cache/
 checkpoints/
 
@@ -12,3 +12,7 @@ __pycache__/
 .venv/
 venv/
 .env
+
+# OS junk
+.DS_Store
+Thumbs.db

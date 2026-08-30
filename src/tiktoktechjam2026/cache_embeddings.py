@@ -27,80 +27,284 @@ models/spatial_stream.py exist.
 """
 
 
+import argparse
+import csv
+import random
 from pathlib import Path
 
+import numpy as np
 import torch
+from PIL import Image
 from tqdm import tqdm
 
-from tiktoktechjam2026.data.datasets import CIFAKEDataset
+from tiktoktechjam2026.data.datasets import load_manifest
 from tiktoktechjam2026.models.spatial_stream import SpatialStream
 
 
-def get_balanced_indices(dataset, per_class):
-    real_indices = []
-    fake_indices = []
+CACHE_DIR = Path("cache/spatial_embeddings")
+EMBED_DIM = 512
 
-    for i, (_, original_label) in enumerate(dataset.dataset.samples):
-        class_name = dataset.dataset.classes[original_label].upper()
 
-        if class_name == "REAL" and len(real_indices) < per_class:
-            real_indices.append(i)
+def shuffled_subset(rows, limit=None, seed=0):
+    if limit is None:
+        return rows
 
-        elif class_name == "FAKE" and len(fake_indices) < per_class:
-            fake_indices.append(i)
+    rng = random.Random(seed)
 
-        if len(real_indices) == per_class and len(fake_indices) == per_class:
-            break
+    rows = rows.copy()
+    rng.shuffle(rows)
 
-    return real_indices + fake_indices
+    return rows[:limit]
 
 
 def main():
-    # For now: cache 1000 REAL + 1000 FAKE training images
-    split = "test"
-    per_class = 1000
+    parser = argparse.ArgumentParser()
 
-    dataset = CIFAKEDataset("data/CIFAKE", split=split)
+    parser.add_argument(
+        "--split",
+        default="train",
+        choices=["train", "validation_demo"],
+    )
+
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only cache a random N-image subset for testing.",
+    )
+
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=64,
+    )
+
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+    )
+
+    args = parser.parse_args()
+
+    # ============================================================
+    # Load manifest
+    # ============================================================
+
+    rows = load_manifest(split=args.split)
+
+    rows = shuffled_subset(
+        rows,
+        limit=args.limit,
+        seed=args.seed,
+    )
+
+    if not rows:
+        raise RuntimeError(
+            f"No rows found for split={args.split}"
+        )
+
+    print(
+        f"\nCaching {len(rows)} images "
+        f"from split={args.split}"
+    )
+
+    # ============================================================
+    # Load frozen CLIP spatial stream
+    # ============================================================
+
+    print("\nLoading CLIP spatial stream...")
+
     spatial = SpatialStream()
 
-    indices = get_balanced_indices(dataset, per_class)
+    spatial.model.eval()
 
-    embeddings = []
-    labels = []
+    for parameter in spatial.model.parameters():
+        parameter.requires_grad = False
 
-    for i in tqdm(indices, desc=f"Caching {split} CLIP embeddings"):
-        image, label = dataset[i]
+    # ============================================================
+    # Allocate output
+    # ============================================================
 
-        image_tensor = spatial.preprocess(image).unsqueeze(0)
-        embedding = spatial.encode(image_tensor)
+    embeddings = np.empty(
+        (len(rows), EMBED_DIM),
+        dtype=np.float32,
+    )
 
-        embeddings.append(embedding.squeeze(0).cpu())
-        labels.append(label)
+    skipped = []
 
-    embeddings = torch.stack(embeddings)
-    labels = torch.tensor(labels, dtype=torch.long)
+    batch_tensors = []
+    batch_indices = []
 
-    cache_dir = Path("cache/spatial_embeddings")
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    # ============================================================
+    # Batch CLIP encoding
+    # ============================================================
 
-    output_path = cache_dir / f"cifake_{split}.pt"
+    def flush_batch():
+        if not batch_tensors:
+            return
 
-    torch.save(
-        {
-            "embeddings": embeddings,
-            "labels": labels,
-        },
-        output_path,
+        batch = torch.stack(
+            batch_tensors
+        )
+
+        with torch.no_grad():
+            output = spatial.encode(batch)
+
+        output = output.float().cpu().numpy()
+
+        for local_i, global_i in enumerate(
+            batch_indices
+        ):
+            embeddings[global_i] = output[local_i]
+
+        batch_tensors.clear()
+        batch_indices.clear()
+
+    # ============================================================
+    # Cache loop
+    # ============================================================
+
+    for i, row in enumerate(
+        tqdm(
+            rows,
+            desc=f"Caching {args.split} CLIP embeddings",
+        )
+    ):
+
+        try:
+            image = Image.open(
+                row["path"]
+            ).convert("RGB")
+
+        except Exception as e:
+            skipped.append(
+                (
+                    row["path"],
+                    str(e),
+                )
+            )
+
+            embeddings[i] = np.nan
+            continue
+
+        image_tensor = spatial.preprocess(
+            image
+        )
+
+        batch_tensors.append(
+            image_tensor
+        )
+
+        batch_indices.append(i)
+
+        if len(batch_tensors) >= args.batch_size:
+            flush_batch()
+
+    flush_batch()
+
+    # ============================================================
+    # Save cache
+    # ============================================================
+
+    CACHE_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    embedding_path = (
+        CACHE_DIR
+        / f"{args.split}_clean.npy"
+    )
+
+    index_path = (
+        CACHE_DIR
+        / f"{args.split}_clean_index.csv"
+    )
+
+    np.save(
+        embedding_path,
+        embeddings,
+    )
+
+    with open(
+        index_path,
+        "w",
+        newline="",
+    ) as f:
+
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "path",
+                "label",
+                "source",
+                "generator",
+            ],
+        )
+
+        writer.writeheader()
+
+        for row in rows:
+            writer.writerow(
+                {
+                    "path": row["path"],
+                    "label": row["label"],
+                    "source": row["source"],
+                    "generator": row["generator"],
+                }
+            )
+
+    # ============================================================
+    # Summary
+    # ============================================================
+
+    labels = np.array(
+        [
+            int(row["label"])
+            for row in rows
+        ]
     )
 
     print("\nDONE")
-    print("Saved to:", output_path)
-    print("Embeddings:", embeddings.shape)
-    print("Labels:", labels.shape)
 
-    # CIFAKE ImageFolder ordering is FAKE=0, REAL=1
-    print("FAKE:", (labels == 0).sum().item())
-    print("REAL:", (labels == 1).sum().item())
+    print(
+        "Embeddings saved to:",
+        embedding_path,
+    )
+
+    print(
+        "Index saved to:",
+        index_path,
+    )
+
+    print(
+        "Embedding shape:",
+        embeddings.shape,
+    )
+
+    print(
+        "REAL:",
+        int((labels == 0).sum()),
+    )
+
+    print(
+        "FAKE:",
+        int((labels == 1).sum()),
+    )
+
+    print(
+        "Skipped:",
+        len(skipped),
+    )
+
+    if skipped:
+        print("\nFirst few skipped files:")
+
+        for path, error in skipped[:5]:
+            print(
+                f"  {path}: {error}"
+            )
 
 
 if __name__ == "__main__":
