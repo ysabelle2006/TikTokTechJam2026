@@ -28,7 +28,7 @@ class AIGCFolderDataset(Dataset):
             if not class_dir.exists():
                 continue
 
-            for image_path in class_dir.iterdir():
+            for image_path in sorted(class_dir.iterdir()):
                 if image_path.suffix.lower() in {
                     ".jpg",
                     ".jpeg",

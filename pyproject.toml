@@ -16,6 +16,8 @@ dependencies = [
     "opencv-python-headless>=4.9",
     "scikit-learn>=1.4",
     "tqdm>=4.66",
+    "datasets>=5.0.1",
+    "matplotlib>=3.11.1",
 ]
 
 [project.scripts]

@@ -1,0 +1,13 @@
+{
+    "accuracy": 0.9865,
+    "auc": 0.999228,
+    "fpr": 0.015,
+    "fnr": 0.012,
+    "best_threshold": 0.167,
+    "best_accuracy": 0.987,
+    "real_probability_mean": 0.0166223905980587,
+    "real_probability_median": 2.0492858521237167e-09,
+    "fake_probability_mean": 0.9866576194763184,
+    "fake_probability_median": 1.0,
+    "num_images": 2000
+}

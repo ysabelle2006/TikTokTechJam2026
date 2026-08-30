@@ -1,0 +1,116 @@
+{
+    "checkpoint": "results/v3_transform_aware/best.pt",
+    "test_dataset": "data/cifake/test",
+    "results": {
+        "clean": {
+            "accuracy": 0.96205,
+            "auc": 0.9950734700000001,
+            "fpr": 0.0562,
+            "fnr": 0.0197
+        },
+        "jpeg_q90": {
+            "accuracy": 0.9639,
+            "auc": 0.9948077849999999,
+            "fpr": 0.0498,
+            "fnr": 0.0224,
+            "accuracy_drop_from_clean": -0.0018500000000000183
+        },
+        "jpeg_q70": {
+            "accuracy": 0.96225,
+            "auc": 0.9943541300000001,
+            "fpr": 0.0529,
+            "fnr": 0.0226,
+            "accuracy_drop_from_clean": -0.000200000000000089
+        },
+        "jpeg_q50": {
+            "accuracy": 0.93225,
+            "auc": 0.983974895,
+            "fpr": 0.0604,
+            "fnr": 0.0751,
+            "accuracy_drop_from_clean": 0.029799999999999938
+        },
+        "jpeg_q30": {
+            "accuracy": 0.90785,
+            "auc": 0.9704205999999999,
+            "fpr": 0.0715,
+            "fnr": 0.1128,
+            "accuracy_drop_from_clean": 0.054199999999999915
+        },
+        "blur_0.5": {
+            "accuracy": 0.9541,
+            "auc": 0.99320257,
+            "fpr": 0.0197,
+            "fnr": 0.0721,
+            "accuracy_drop_from_clean": 0.007950000000000013
+        },
+        "blur_1.0": {
+            "accuracy": 0.8833,
+            "auc": 0.9524215800000002,
+            "fpr": 0.0916,
+            "fnr": 0.1418,
+            "accuracy_drop_from_clean": 0.07874999999999999
+        },
+        "blur_2.0": {
+            "accuracy": 0.6728,
+            "auc": 0.772292885,
+            "fpr": 0.4598,
+            "fnr": 0.1946,
+            "accuracy_drop_from_clean": 0.28925
+        },
+        "resize_0.5": {
+            "accuracy": 0.83775,
+            "auc": 0.9162861299999999,
+            "fpr": 0.1733,
+            "fnr": 0.1512,
+            "accuracy_drop_from_clean": 0.12429999999999997
+        },
+        "resize_0.25": {
+            "accuracy": 0.63325,
+            "auc": 0.73589238,
+            "fpr": 0.5463,
+            "fnr": 0.1872,
+            "accuracy_drop_from_clean": 0.3288
+        },
+        "noise_0.02": {
+            "accuracy": 0.9179,
+            "auc": 0.977346465,
+            "fpr": 0.0522,
+            "fnr": 0.112,
+            "accuracy_drop_from_clean": 0.04414999999999991
+        },
+        "noise_0.05": {
+            "accuracy": 0.85905,
+            "auc": 0.9434732550000001,
+            "fpr": 0.1835,
+            "fnr": 0.0984,
+            "accuracy_drop_from_clean": 0.10299999999999998
+        },
+        "noise_0.10": {
+            "accuracy": 0.6838,
+            "auc": 0.8304132449999999,
+            "fpr": 0.5359,
+            "fnr": 0.0965,
+            "accuracy_drop_from_clean": 0.27825
+        },
+        "color_jitter": {
+            "accuracy": 0.9507,
+            "auc": 0.99288867,
+            "fpr": 0.078,
+            "fnr": 0.0206,
+            "accuracy_drop_from_clean": 0.011349999999999971
+        },
+        "center_crop_0.8": {
+            "accuracy": 0.9119,
+            "auc": 0.9721215450000001,
+            "fpr": 0.0605,
+            "fnr": 0.1157,
+            "accuracy_drop_from_clean": 0.05014999999999992
+        }
+    },
+    "summary": {
+        "clean_accuracy": 0.96205,
+        "average_transformed_accuracy": 0.8621999999999999,
+        "worst_condition": "resize_0.25",
+        "worst_accuracy": 0.63325
+    }
+}
