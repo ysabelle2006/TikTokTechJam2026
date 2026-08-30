@@ -177,6 +177,149 @@ def cache_frequency_inputs(splits, mode=None, limit=None):
         print()
 
 
+# --------------------------------------------------------------------------
+# V2: augmented-variant pool
+#
+# For each training image we fix a pool of AUG_POOL_SIZE random transforms
+# (augmentations.random_transform, each a seeded k-in-[1,5] subset of the
+# brief's grid) and cache the CLIP embedding of every rendered variant.
+# `render_aug_variant` is the single source of truth for the render, shared
+# by the cache and by train.py's V2 dataset -- so the cached spatial vector
+# and the live-recomputed frequency map always come from identical pixels.
+#
+# Frequency maps for the pool are cached for VAL only (small, keeps the
+# per-epoch val metric fast). Train frequency maps are recomputed live.
+# --------------------------------------------------------------------------
+
+def aug_pool_seed(path: str, variant: int) -> int:
+    return _seed_for(path, f"augpool{variant}")
+
+
+def render_aug_variant(image, path: str, variant: int):
+    """Deterministic render of pool variant `variant` for `image` at `path`."""
+    rng = np.random.default_rng(aug_pool_seed(path, variant))
+    return augmentations.random_transform(image, rng)
+
+
+def aug_pool_cache_path(split: str) -> str:
+    return os.path.join(split_cache_dir(split), "aug_pool.npy")
+
+
+def aug_pool_freq_cache_path(split: str, mode: str = None) -> str:
+    mode = mode or config.FREQUENCY_MODE
+    return os.path.join(split_cache_dir(split), f"aug_pool_freq_{mode}.npy")
+
+
+def aug_pool_freq_energy_cache_path(split: str, mode: str = None) -> str:
+    mode = mode or config.FREQUENCY_MODE
+    return os.path.join(split_cache_dir(split), f"aug_pool_freq_{mode}_energy.npy")
+
+
+def load_aug_pool(split: str):
+    """(embeddings [N, POOL, 512] float32, labels [N] int64, paths list[str])."""
+    emb = np.load(aug_pool_cache_path(split))
+    labels = np.load(os.path.join(split_cache_dir(split), "labels.npy"))
+    with open(os.path.join(split_cache_dir(split), "manifest.json"), encoding="utf-8") as fh:
+        paths = json.load(fh)["paths"]
+    return emb, labels[: len(emb)], paths[: len(emb)]
+
+
+def load_aug_pool_freq(split: str, mode: str = None):
+    """(maps [N, POOL, C, 224, 224] float16 memmap, energy [N, POOL] float32)."""
+    maps = np.load(aug_pool_freq_cache_path(split, mode), mmap_mode="r")
+    energy = np.load(aug_pool_freq_energy_cache_path(split, mode))
+    return maps, energy
+
+
+@torch.no_grad()
+def cache_augmented_pool(stream, splits, pool_size, batch_size, limit=None, workers=6):
+    """CLIP-embed `pool_size` seeded random-transform variants per image."""
+    for split in splits:
+        dataset = SidDataset(split)
+        n = len(dataset) if limit is None else min(limit, len(dataset))
+        out_path = aug_pool_cache_path(split)
+        if os.path.exists(out_path) and limit is None:
+            existing = np.load(out_path, mmap_mode="r")
+            if existing.shape == (n, pool_size, config.SPATIAL_EMBED_DIM):
+                print(f"[{split}] aug pool ({pool_size}/img) cached, skipping")
+                continue
+        os.makedirs(split_cache_dir(split), exist_ok=True)
+
+        out = np.lib.format.open_memmap(
+            out_path, mode="w+", dtype=np.float32,
+            shape=(n, pool_size, config.SPATIAL_EMBED_DIM),
+        )
+        jobs = [(i, v) for i in range(n) for v in range(pool_size)]
+        t0 = time.time()
+
+        def _render(j):
+            i, v = jobs[j]
+            image, _, path = dataset[i]
+            rendered = render_aug_variant(image, path, v)
+            return preprocessing.prepare_spatial_input(rendered)
+
+        batch, slots = [], []
+        for j, tensor in _bounded_pmap(_render, len(jobs), workers, lookahead=batch_size * 3):
+            batch.append(tensor)
+            slots.append(jobs[j])
+            if len(batch) == batch_size or j == len(jobs) - 1:
+                vecs = stream.encode(torch.stack(batch)).cpu().numpy()
+                for (i, v), vec in zip(slots, vecs):
+                    out[i, v] = vec
+                batch, slots = [], []
+                rate = (j + 1) / (time.time() - t0)
+                print(f"\r[{split}] aug pool  {j + 1}/{len(jobs)}  ({rate:.1f} render/s)",
+                      end="", flush=True)
+        out.flush()
+        print()
+
+
+def cache_augmented_pool_freq(splits, pool_size, mode=None, limit=None, workers=4):
+    """Cache the frequency map + residual-energy for every pool variant.
+
+    Intended for VAL only -- train pool freq maps would be ~18 GB and are
+    recomputed live during training instead.
+    """
+    mode = mode or config.FREQUENCY_MODE
+    for split in splits:
+        dataset = SidDataset(split)
+        n = len(dataset) if limit is None else min(limit, len(dataset))
+        maps_path = aug_pool_freq_cache_path(split, mode)
+        if os.path.exists(maps_path) and limit is None:
+            if np.load(maps_path, mmap_mode="r").shape[:2] == (n, pool_size):
+                print(f"[{split}] aug pool freq ({mode}) cached, skipping")
+                continue
+        os.makedirs(split_cache_dir(split), exist_ok=True)
+
+        sample = preprocessing.prepare_frequency_input(dataset[0][0], mode)
+        out = np.lib.format.open_memmap(
+            maps_path, mode="w+", dtype=np.float16,
+            shape=(n, pool_size, *sample.shape),
+        )
+        energy = np.empty((n, pool_size), dtype=np.float32)
+        jobs = [(i, v) for i in range(n) for v in range(pool_size)]
+        t0 = time.time()
+
+        def _one(j):
+            i, v = jobs[j]
+            image, _, path = dataset[i]
+            rendered = render_aug_variant(image, path, v)
+            return (preprocessing.prepare_frequency_input(rendered, mode).numpy(),
+                    preprocessing.residual_energy(rendered))
+
+        for j, (fmap, e) in _bounded_pmap(_one, len(jobs), workers, lookahead=256):
+            i, v = jobs[j]
+            out[i, v] = fmap
+            energy[i, v] = e
+            if (j + 1) % 256 == 0 or j == len(jobs) - 1:
+                rate = (j + 1) / (time.time() - t0)
+                print(f"\r[{split}] aug pool freq {mode}  {j + 1}/{len(jobs)}  ({rate:.1f}/s)",
+                      end="", flush=True)
+        out.flush()
+        np.save(aug_pool_freq_energy_cache_path(split, mode), energy)
+        print()
+
+
 @torch.no_grad()
 def _embed_condition(stream, dataset, condition, batch_size, limit, workers=4):
     """
@@ -212,7 +355,8 @@ def _embed_condition(stream, dataset, condition, batch_size, limit, workers=4):
     return out
 
 
-def main(splits=None, conditions=None, batch_size=64, limit=None, freq=True):
+def main(splits=None, conditions=None, batch_size=64, limit=None, freq=True,
+         aug_pool=None):
     splits = splits or ["train", "val", "test"]
     stream = SpatialStream()
     stream.eval()
@@ -248,6 +392,16 @@ def main(splits=None, conditions=None, batch_size=64, limit=None, freq=True):
         if freq_splits:
             cache_frequency_inputs(freq_splits, limit=limit)
 
+    # V2 augmented-variant pool: spatial embeddings for train + val, plus
+    # frequency maps for val only (train freq maps are recomputed live).
+    if aug_pool:
+        pool_splits = [s for s in splits if s in ("train", "val")]
+        if pool_splits:
+            cache_augmented_pool(stream, pool_splits, aug_pool, batch_size, limit)
+            cache_augmented_pool_freq(
+                [s for s in pool_splits if s == "val"], aug_pool, limit=limit
+            )
+
     print("done.")
 
 
@@ -261,5 +415,9 @@ if __name__ == "__main__":
                     help="cap images per split (smoke test; forces recompute)")
     ap.add_argument("--no-freq", action="store_true",
                     help="skip caching frequency-stream inputs for V1")
+    ap.add_argument("--aug-pool", type=int, default=None, metavar="N",
+                    help="also cache N seeded augmented CLIP-embedding variants "
+                         "per image for train/val (V2); e.g. --aug-pool 8")
     args = ap.parse_args()
-    main(args.splits, args.conditions, args.batch_size, args.limit, freq=not args.no_freq)
+    main(args.splits, args.conditions, args.batch_size, args.limit,
+         freq=not args.no_freq, aug_pool=args.aug_pool)

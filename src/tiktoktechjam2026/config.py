@@ -59,6 +59,22 @@ SEED = 42
 DEVICE = os.environ.get("TTJ_DEVICE", "cpu")
 
 # --------------------------------------------------------------------------
+# V2: transform-aware augmentation (same two-stream architecture as V1).
+#
+# The CLIP embedding of a transformed image is cached (a fixed pool of
+# AUG_POOL_SIZE seeded variants per training image -- see
+# cache_embeddings.cache_augmented_pool). The frequency map is NOT cached
+# for training: it is recomputed live each epoch from the same seeded
+# render, so the CNN gets fresh gradients and stays aligned with the cached
+# spatial vector. Each training example is the clean view with probability
+# AUG_CLEAN_FRACTION, otherwise a uniformly-random one of the pool.
+# --------------------------------------------------------------------------
+AUG_POOL_SIZE = 8
+AUG_CLEAN_FRACTION = 0.3
+EPOCHS_V2 = 15
+NUM_WORKERS = int(os.environ.get("TTJ_NUM_WORKERS", "6"))
+
+# --------------------------------------------------------------------------
 # Dataset (V0 / V1): SID_Set, binary real vs fully-synthetic.
 # `tampered` (label 2) is dropped for these stages -- V0/V1 ask whether the
 # streams separate genuine photos from fully generated images at all.
@@ -85,10 +101,12 @@ EMBEDDING_CACHE_DIR = os.path.join("cache", "spatial_embeddings")
 CHECKPOINTS = {
     "v0": os.path.join(CHECKPOINT_DIR, "v0.pt"),
     "v1": os.path.join(CHECKPOINT_DIR, "v1.pt"),
+    "v2": os.path.join(CHECKPOINT_DIR, "v2.pt"),
 }
 RESULT_FILES = {
     "v0": os.path.join(RESULTS_DIR, "v0.json"),
     "v1": os.path.join(RESULTS_DIR, "v1.json"),
+    "v2": os.path.join(RESULTS_DIR, "v2.json"),
 }
 
 # --------------------------------------------------------------------------

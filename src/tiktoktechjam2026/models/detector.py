@@ -31,7 +31,11 @@ from tiktoktechjam2026.models.spatial_head import SpatialHead
 from tiktoktechjam2026.models.spatial_stream import SpatialStream
 from tiktoktechjam2026.transforms import preprocessing
 
-VARIANTS = ("v0", "v1")
+# v2 = same two-stream architecture as v1; the difference is training-time
+# augmentation, not the model. Anything that branches on "is this two-stream?"
+# treats v1 and v2 identically.
+VARIANTS = ("v0", "v1", "v2")
+TWO_STREAM_VARIANTS = ("v1", "v2")
 
 
 class Detector(nn.Module):

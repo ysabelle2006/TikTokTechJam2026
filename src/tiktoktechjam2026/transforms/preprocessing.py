@@ -25,6 +25,11 @@ import torch
 from PIL import Image
 from torchvision import transforms
 
+# OpenCV spawns its own thread pool per call. Inside DataLoader workers that
+# multiplies out (workers x cv2 threads) and thrashes the CPU; pin it to 1 so
+# parallelism comes only from the worker processes.
+cv2.setNumThreads(1)
+
 from tiktoktechjam2026 import config
 
 IMAGE_SIZE = config.IMAGE_SIZE

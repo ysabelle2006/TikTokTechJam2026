@@ -173,7 +173,7 @@ def evaluate_crossdataset(variant: str, per_class: int = None, grid: bool = Fals
 
     payload = {
         "variant": variant,
-        "freq_mode": detector.freq_mode if variant == "v1" else None,
+        "freq_mode": detector.freq_mode if variant != "v0" else None,
         "dataset": "CIFAKE test (data/cifake/test)",
         "trained_on": "SID_Set real vs full_synthetic -- CIFAKE never seen in training",
         "n": len(paths),
@@ -186,8 +186,8 @@ def evaluate_crossdataset(variant: str, per_class: int = None, grid: bool = Fals
         "clean": rows["clean"],
         "conditions": rows if grid else None,
     }
-    if variant == "v1":
-        payload["v1_caveat"] = (
+    if variant != "v0":
+        payload["freq_caveat"] = (
             "CIFAKE is 32px; the frequency stream sees mostly upscaling "
             "artifacts, not generator residuals."
         )
@@ -214,8 +214,8 @@ def _print_table(variant, rows, conditions):
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Cross-dataset (CIFAKE) evaluation for V0/V1.")
-    ap.add_argument("--variant", choices=["v0", "v1"], required=True)
+    ap = argparse.ArgumentParser(description="Cross-dataset (CIFAKE) evaluation for V0/V1/V2.")
+    ap.add_argument("--variant", choices=["v0", "v1", "v2"], required=True)
     ap.add_argument("--per-class", type=int, default=None,
                     help="cap images per class (default: all ~10k)")
     ap.add_argument("--grid", action="store_true",

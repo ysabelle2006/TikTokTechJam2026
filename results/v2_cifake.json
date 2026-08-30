@@ -1,0 +1,49 @@
+{
+  "variant": "v2",
+  "freq_mode": "srm",
+  "dataset": "CIFAKE test (data/cifake/test)",
+  "trained_on": "SID_Set real vs full_synthetic -- CIFAKE never seen in training",
+  "n": 20000,
+  "n_real": 10000,
+  "n_fake": 10000,
+  "generated_at": "2026-08-30T15:34:15",
+  "checkpoint_meta": {
+    "variant": "v2",
+    "freq_mode": "srm",
+    "best_epoch": 11,
+    "val_clean_acc": 0.99,
+    "val_clean_auc": 0.9998656250000001,
+    "val_aug_acc": 0.988671875,
+    "val_aug_auc": 0.9997173828124999,
+    "val_clean_aug_gap": 0.0013281250000000133,
+    "epochs_run": 15,
+    "batch_size": 256,
+    "lr": 0.001,
+    "aug_pool_size": 8,
+    "aug_clean_fraction": 0.3,
+    "n_train": 12800
+  },
+  "threshold_note": "Acc@0.5 and AUC are zero-shot: the SID-trained checkpoint is applied to CIFAKE with no target-domain tuning. Acc@opt is CALIBRATED ON TARGET -- the decision threshold is fit to maximise balanced accuracy on a random 50% split of CIFAKE test (using CIFAKE labels), then scored on the held-out 50%. It answers 'how well could this model do on CIFAKE if allowed to tune one scalar', an upper bound on deployable transfer -- not zero-shot.",
+  "ran_transform_grid": false,
+  "clean": {
+    "accuracy_at_0.5": 0.5585,
+    "accuracy_at_opt": 0.7124,
+    "opt_threshold": 0.0031925300136208534,
+    "opt_threshold_full_set": 0.0031925300136208534,
+    "auc": 0.789784055,
+    "per_class": {
+      "real": {
+        "precision": 0.5315261909894374,
+        "recall": 0.9863,
+        "f1": 0.6907830228323295
+      },
+      "fake": {
+        "precision": 0.9051246537396122,
+        "recall": 0.1307,
+        "f1": 0.22841663753932193
+      }
+    }
+  },
+  "conditions": null,
+  "freq_caveat": "CIFAKE is 32px; the frequency stream sees mostly upscaling artifacts, not generator residuals."
+}

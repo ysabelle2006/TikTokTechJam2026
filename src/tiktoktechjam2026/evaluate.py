@@ -134,9 +134,10 @@ def evaluate(variant: str, batch_size: int = None, out_json: str = None):
     detector = Detector.from_checkpoint(config.CHECKPOINTS[variant])
     detector.eval()
 
-    # V1 needs the raw images to rebuild frequency inputs; V0 works from cache alone.
+    # Two-stream variants (v1, v2) need the raw images to rebuild frequency
+    # inputs; v0 works from the cache alone.
     paths = None
-    if variant == "v1":
+    if variant != "v0":
         _, _, cache_paths = load_cache("test", "clean")
         paths = SidDataset("test").paths
         if list(cache_paths) != list(paths):
@@ -192,7 +193,7 @@ def _write_json(variant, out_json, rows, detector, n_test):
     drops = [rows[k]["drop"] for k, _, _ in config.EVAL_CONDITIONS if k != "clean"]
     payload = {
         "variant": variant,
-        "freq_mode": detector.freq_mode if variant == "v1" else None,
+        "freq_mode": detector.freq_mode if variant != "v0" else None,
         "dataset": "SID_Set (real vs full_synthetic)",
         "n_test": int(n_test),
         "generated_at": dt.datetime.now().isoformat(timespec="seconds"),
@@ -222,7 +223,7 @@ def _write_json(variant, out_json, rows, detector, n_test):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Robustness evaluation for V0 / V1.")
-    ap.add_argument("--variant", choices=["v0", "v1"], required=True)
+    ap.add_argument("--variant", choices=["v0", "v1", "v2"], required=True)
     ap.add_argument("--batch-size", type=int, default=None)
     ap.add_argument("--out", default=None, help="override results JSON path")
     args = ap.parse_args()
