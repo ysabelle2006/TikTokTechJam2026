@@ -129,8 +129,8 @@ def main(
 if __name__ == "__main__":
     main(
         image_dir="data/cifake/train",
-        cache_file="results/v2/train_embeddings_augmented.pt",
+        cache_file="results/v0/train_embeddings_full.pt",
         max_samples=None,
-        augmentation=random_transform,
+        augmentation=None,
         seed=42
     )

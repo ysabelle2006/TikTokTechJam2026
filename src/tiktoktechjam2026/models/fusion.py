@@ -30,9 +30,47 @@ single logit + sigmoid.
 """
 
 
-class FusionHead:
-    def __init__(self):
-        raise NotImplementedError
+import torch
+import torch.nn as nn
 
-    def forward(self, spatial_embedding, frequency_embedding, residual_energy):
-        raise NotImplementedError
+
+class FusionHead(nn.Module):
+    def __init__(self, hidden_dims=(128, 64)):
+        super().__init__()
+
+        input_dim = 512 + 128 + 1
+
+        layers = []
+        prev_dim = input_dim
+
+        for hidden_dim in hidden_dims:
+            layers.extend([
+                nn.Linear(prev_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+            ])
+            prev_dim = hidden_dim
+
+        # One output logit for binary classification
+        layers.append(nn.Linear(prev_dim, 1))
+
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(
+        self,
+        spatial_embedding,
+        frequency_embedding,
+        residual_energy,
+    ):
+        fused = torch.cat(
+            [
+                spatial_embedding,
+                frequency_embedding,
+                residual_energy,
+            ],
+            dim=1,
+        )
+
+        logit = self.mlp(fused)
+
+        return logit
