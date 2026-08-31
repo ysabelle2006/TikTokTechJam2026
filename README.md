@@ -332,16 +332,9 @@ How to populate each one:
     brief section 5.4 -- our counts (5,000 / 8,844) match its stated
     4,998 / 8,843 almost exactly, so this is that exact set, not a
     resample. It's sourced from WildFake
-    (https://modelscope.cn/datasets/hy2628982280/WildFake/summary --
+    (https://modelscope.cn/datasets/hy2628982280/WildFake/summary (specifically DALL-E's Advanced folder) --
     use the translation button before browsing it, per the brief) and
-    the standard COCO val2017 images, but as a specific curated
-    subset the organizers distributed for this purpose rather than
-    something re-derivable from the public datasets alone -- get it
-    the same way you received the rest of the hackathon materials
-    (the technical workshop's shared resources) rather than
-    re-sampling your own 5,000/8,844 split, since a different sample
-    wouldn't reproduce our reported held-out-generator numbers
-    exactly. This is the ONLY data source used for `validation_demo`
+    the standard COCO val2017 images. This is the ONLY data source used for `validation_demo`
     (aside from SID_Set's own validation rows, folded in
     automatically -- see `datasets.py`); it is never trained on
     (`build_manifest()` asserts this).
@@ -493,7 +486,7 @@ ViT-B/32 is roughly 150M parameters; the frequency CNN and fusion head
 together are under 1M), so there's headroom to consider a larger
 backbone if a production setting justified the added cost.
 
-## Error analysis (required deliverable)
+## Error analysis
 
 `src/error_analysis.py` reads a checkpoint's dumped predictions
 (`evaluate.py --dump-predictions`) and pulls specific misclassified
