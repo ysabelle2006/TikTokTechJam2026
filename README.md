@@ -353,53 +353,85 @@ results" below.
 
 ## Reproducing results
 
+Every `evaluate.py`/`train.py`/`calibrate.py` call below needs an
+explicit `--stage`. **There is no "run everything" command on
+purpose** -- each stage below is self-contained and independent (V1
+doesn't need V0's checkpoint, V2 doesn't need V1's), so you only run
+the block for the stage you actually want. Run just the "Stage V2"
+block if all you want is the submission model.
+
+**Watch out for `evaluate.py`'s default: `--stage` defaults to `v0`.**
+`uv run python src/evaluate.py --dump-predictions` with no `--stage`
+silently scores the weak V0 spatial-only baseline (worse AUC, much
+higher FNR) and overwrites `results/v0_spatial_only.json` -- it looks
+like a regression in your terminal output but it's actually just the
+wrong stage. Always pass `--stage v2` explicitly when you mean the
+submission model.
+
+### Prerequisites (run once, regardless of which stage you want)
+
 From the repo root, after `uv sync` and getting the raw data in place
 per "Data" above:
 
-    # 1. Build the training manifest and the robustness eval grid.
-    uv run python src/data/datasets.py
-    uv run python scripts/build_eval_grid.py
+    uv run python src/data/datasets.py       # builds data/manifest.csv
+    uv run python scripts/build_eval_grid.py # builds data/eval_manifest.csv (all stages evaluate against this)
 
-    # 2. Cache CLIP embeddings (clean + augmented variants for V2).
+### Stage V0 -- spatial stream only (baseline, not submitted)
+
     uv run python src/cache_embeddings.py --variant clean
-    uv run python src/cache_embeddings.py --variant augmented
-
-    # 3. Train each stage (V0 and V1 are quick; V2 is the ~12-hour one).
     uv run python src/train.py --stage v0
-    uv run python src/train.py --stage v1                  # "srm" mode (default)
-    uv run python src/train.py --stage v1 --freq-mode fft   # "fft" ablation
-    uv run python src/train.py --stage v2 --num-workers 6   # tune --num-workers to your CPU
-
-    # 4. Evaluate each stage against the robustness grid.
     uv run python src/evaluate.py --stage v0
+
+Writes `checkpoints/v0_spatial_only/` and `results/v0_spatial_only.json`.
+
+### Stage V1 -- + frequency stream (not submitted)
+
+    uv run python src/cache_embeddings.py --variant clean   # skip if you already ran this for V0
+    uv run python src/train.py --stage v1                   # "srm" mode (default)
+    uv run python src/train.py --stage v1 --freq-mode fft    # "fft" ablation -- this is what V2 builds on
     uv run python src/evaluate.py --stage v1
     uv run python src/evaluate.py --stage v1 --freq-mode fft
-    uv run python src/evaluate.py --stage v2 --dump-predictions   # --dump-predictions feeds error_analysis.py
 
-    # 5. Calibrate V2's raw scores into real probabilities.
+Writes `checkpoints/v1_fusion_srm/` + `checkpoints/v1_fusion_fft/` and
+the matching `results/v1_fusion_srm.json` / `results/v1_fusion_fft.json`.
+
+### Stage V2 -- + transform-aware augmentation (**this is the submission model**)
+
+    uv run python src/cache_embeddings.py --variant clean       # skip if already cached
+    uv run python src/cache_embeddings.py --variant augmented
+    uv run python src/train.py --stage v2 --num-workers 6       # ~12 hours end-to-end; tune --num-workers to your CPU
+    uv run python src/evaluate.py --stage v2 --dump-predictions  # --dump-predictions feeds error_analysis.py below
     uv run python src/calibrate.py --stage v2
 
-    # 5b. Optional: the frequency-gate + reweighting ablation (see
-    #     "Ablation: frequency gate + failure-condition reweighting"
-    #     above) -- writes to a separate checkpoint/results name, does
-    #     NOT overwrite step 3-5's V2 output.
+Writes `checkpoints/v2_augmented_fft/` and `results/v2_augmented_fft.json`
+-- **the checkpoint referenced everywhere else in this README as "the
+submission model"** (see "Submission model" near the top). `infer.py`
+uses it by default with no extra flags.
+
+### Optional: frequency-gate + reweighting ablation (documented experiment, NOT submitted)
+
+See "Ablation: frequency gate + failure-condition reweighting" above
+for why this exists and why it isn't the submission. Requires Stage
+V2's augmented embeddings cache to already exist (above). Writes to a
+separate checkpoint/results name, so it never overwrites Stage V2's
+output:
+
     uv run python src/train.py --stage v2 --freq-mode fft --use-freq-gate
     uv run python src/evaluate.py --stage v2 --freq-mode fft \
         --checkpoint checkpoints/v2_augmented_fft_gated/model.pt \
         --result-name v2_augmented_fft_gated --dump-predictions
     uv run python src/calibrate.py --stage v2 --checkpoint checkpoints/v2_augmented_fft_gated/model.pt
 
-    # 6. The actual deliverable: score any folder of images.
-    uv run python src/infer.py --input path/to/some/images
+### Deliverable + explainability scripts (use the Stage V2 checkpoint by default)
 
-    # 7. Explainability + error analysis.
+    uv run python src/infer.py --input path/to/some/images   # THE deliverable: image dir -> JSON {image_path, pred}
     uv run python src/explain.py --mode gradcam --image path/to/one.jpg
     uv run python src/explain.py --mode spectrum
     uv run python src/error_analysis.py
 
-Step 3's V2 training is the expensive one -- see its own `--help` and
-`train.py`'s module docstring for `--num-workers` guidance if it's
-running on limited CPU/RAM.
+All four default to `--stage v2` -> `checkpoints/v2_augmented_fft/` --
+pass `--checkpoint checkpoints/v2_augmented_fft_gated/model.pt` only
+if you deliberately want to inspect the ablation checkpoint instead.
 
 ## Limitations & what we'd improve with more time
 
