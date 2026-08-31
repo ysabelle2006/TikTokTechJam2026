@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+outputs/
+cache/
+checkpoints/
+# Anchored to the repo root (leading slash) -- an unanchored "data/" also
+# matched src/data/, silently excluding src/data/datasets.py (real source
+# code, not dataset files) from git. Caught by auditing .gitignore against
+# `git ls-files` before submission; see the top-level `data/` directory
+# this is actually meant to exclude in "Data" in README.md.
+/data/
+.DS_Store
+**/.DS_Store
+
+# Large, fully regenerable per-row prediction dumps (evaluate.py --dump-predictions)
+# -- results/*.json summaries and results/*_error_analysis.{csv,md} stay tracked.
+results/*_predictions.csv

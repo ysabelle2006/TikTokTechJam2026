@@ -15,11 +15,16 @@ dependencies = [
     "numpy>=1.26",
     "opencv-python-headless>=4.9",
     "scikit-learn>=1.4",
+    "scipy>=1.11",   # transforms/preprocessing.py: SRM residual convolution + FFT (also a scikit-learn transitive dep, but the frequency stream imports it directly)
     "tqdm>=4.66",
 ]
 
-[project.scripts]
-tiktoktechjam2026 = "tiktoktechjam2026:main"
+# This project's own code (src/) is not built/installed as a pip package --
+# it's imported via a plain sys.path insert in each script under scripts/,
+# which works regardless of package layout. `uv sync` only needs to install
+# the dependencies above into .venv.
+[tool.uv]
+package = false
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]
