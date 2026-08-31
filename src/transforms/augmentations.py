@@ -26,6 +26,29 @@ Used two ways:
 
 All functions take and return a PIL.Image in RGB mode, so they compose
 with anything else in the pipeline without extra conversions.
+
+Random rotation (below, TRAIN_ONLY_CONDITIONS) is a deliberate
+exception to "one registry, one meaning everywhere": it's real, but
+kept OUT of ALL_CONDITIONS/the eval grid on purpose -- the brief's own
+transform list (reproduced above) doesn't include rotation, so adding
+it there would test against a condition nobody asked for and cost
+another eval-grid rebuild. It exists only as an opt-in for
+sample_condition_names(include_rotation=True), per the SAFE (KDD 2025)
+finding that color-jitter + random-rotation together discourage a
+detector from leaning on colour/composition shortcuts instead of
+genuine forensic signal. Turning it on changes what
+cache_embeddings.py's augmented-variant cache contains, which only
+takes effect on a fresh cache_embeddings.py + train.py run -- it does
+NOT retroactively affect an already-trained checkpoint.
+include_rotation defaults to False, so this addition changes nothing
+about the existing verified V2 pipeline unless a caller explicitly
+opts in.
+
+FAILURE_UPWEIGHTED_CONDITIONS (below) is a different kind of change:
+unlike rotation, it's an update to the DEFAULT sampling weights, not an
+opt-in -- see sample_condition_names()'s docstring for what it does and
+why, and pass weight_failure_conditions=1.0 to recover the old default
+exactly.
 """
 
 import io
@@ -40,6 +63,7 @@ RESIZE_SCALES = (0.5, 0.25)
 NOISE_SIGMAS = (0.02, 0.05, 0.10)
 COLOR_JITTER_RANGE = 0.2  # +/- 20% on each of brightness/contrast/saturation
 CROP_FRACTION = 0.8
+ROTATION_MAX_DEGREES = 15  # +/- degrees -- see random_rotation()'s docstring for why this stays small
 
 
 def jpeg_compress(image: Image.Image, quality: int) -> Image.Image:
@@ -98,6 +122,24 @@ def center_crop(image: Image.Image, crop_fraction: float = CROP_FRACTION) -> Ima
     return cropped.resize((w, h), Image.BICUBIC)
 
 
+def random_rotation(image: Image.Image, max_degrees: float = ROTATION_MAX_DEGREES) -> Image.Image:
+    """Rotate by a random angle in [-max_degrees, +max_degrees].
+
+    Kept to a SMALL angle range on purpose -- see module docstring:
+    this exists to discourage a spatial/colour shortcut, not to
+    simulate any real-world redistribution scenario the way the other
+    transforms do (the brief's grid has no rotation), so there's no
+    reason to make it aggressive enough to itself destroy the fine
+    texture the frequency stream depends on the way a large rotation
+    would.
+    """
+    return image.convert("RGB").rotate(
+        random.uniform(-max_degrees, max_degrees),
+        resample=Image.BICUBIC,
+        expand=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Named condition registry (V2)
 # ---------------------------------------------------------------------------
@@ -144,6 +186,15 @@ COMPOUND_CONDITIONS = {
 
 ALL_CONDITIONS = {**SINGLE_CONDITIONS, **COMPOUND_CONDITIONS}
 
+# TRAIN_ONLY_CONDITIONS: deliberately NOT merged into ALL_CONDITIONS --
+# see module docstring. Only sample_condition_names(include_rotation=True)
+# can reach this; scripts/build_eval_grid.py never does, so the eval
+# grid/robustness table are completely unaffected by this dict's
+# existence.
+TRAIN_ONLY_CONDITIONS = {
+    "random_rotation": lambda im: random_rotation(im, ROTATION_MAX_DEGREES),
+}
+
 
 def condition_names() -> list:
     """All condition names (single-transform + compound), in a stable
@@ -181,7 +232,24 @@ def _weighted_sample_without_replacement(items, weights, k, rng: random.Random):
     return chosen
 
 
-def sample_condition_names(k: int, rng: random.Random, weight_crop: float = 2.0) -> list:
+# Found empirically, not theoretically: evaluate.py's per-real-source
+# FPR breakdown on the v2_augmented_fft checkpoint showed coco_val2017
+# real images misclassified as fake spike to 17-19% FPR under exactly
+# these two conditions (vs. a 2-4% baseline on every other condition,
+# and vs. sid_set's real images barely moving under the same
+# transforms) -- see README's Limitations section and fusion.py's
+# module docstring for the full story. At the pre-existing default
+# weight_crop=2.0 / k_per_image=3, either of these had only roughly a
+# 1-in-6 chance of ever being sampled for a given training image --
+# thin enough that "the model hasn't seen much of exactly the case it
+# does worst on" is a real possibility, not just an architecture gap
+# (see fusion.py's use_freq_gate for the architecture half of this fix).
+FAILURE_UPWEIGHTED_CONDITIONS = ("blur_sigma2.0", "resize_0.25")
+
+
+def sample_condition_names(k: int, rng: random.Random, weight_crop: float = 2.0,
+                            include_rotation: bool = False,
+                            weight_failure_conditions: float = 2.0) -> list:
     """
     k distinct condition names (never "clean" -- callers cache the
     clean embedding separately), for cache_embeddings.py's V2 fixed
@@ -197,12 +265,39 @@ def sample_condition_names(k: int, rng: random.Random, weight_crop: float = 2.0)
     equally, since the eval grid isn't trying to teach the model
     anything, only measure it.
 
+    Each name in FAILURE_UPWEIGHTED_CONDITIONS (see that constant's
+    comment above) is likewise weighted `weight_failure_conditions`x,
+    independent of weight_crop -- this is a NEW default (previously
+    every non-crop condition was weight 1.0), so it changes what
+    cache_embeddings.py's augmented-variant cache contains as soon as
+    that script is next run; it does NOT retroactively affect an
+    already-trained checkpoint. Pass weight_failure_conditions=1.0 to
+    recover the exact pre-this-change sampling distribution.
+
+    include_rotation: if True, also draws from TRAIN_ONLY_CONDITIONS
+    (currently just "random_rotation"), weighted the same as any other
+    non-crop, non-failure condition. Defaults to False so existing
+    callers (and the already-trained V2 checkpoint) are completely
+    unaffected -- this only changes anything for a caller that
+    explicitly opts in AND then reruns cache_embeddings.py + train.py.
+    See module docstring for why rotation is opt-in rather than
+    always-on.
+
     `rng` is passed in (rather than using the module-level `random`
     state) so a caller can seed it once and advance it across many
     rows for a reproducible, stable assignment across reruns -- the
     "fixed set of augmented variants" the architecture doc's caching
     design calls for, not fresh random augmentation every run.
     """
-    names = [n for n in ALL_CONDITIONS if n != "clean"]
-    weights = [weight_crop if n == "center_crop" else 1.0 for n in names]
+    pool = {**ALL_CONDITIONS, **TRAIN_ONLY_CONDITIONS} if include_rotation else ALL_CONDITIONS
+    names = [n for n in pool if n != "clean"]
+
+    def _weight_for(name):
+        if name == "center_crop":
+            return weight_crop
+        if name in FAILURE_UPWEIGHTED_CONDITIONS:
+            return weight_failure_conditions
+        return 1.0
+
+    weights = [_weight_for(n) for n in names]
     return _weighted_sample_without_replacement(names, weights, k, rng)

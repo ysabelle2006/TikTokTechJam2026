@@ -5,11 +5,10 @@ Needs torch installed (uv sync should handle this) -- no download
 required, unlike preview_spatial_stream.py, since this network trains
 from scratch rather than loading a pretrained checkpoint.
 
-NOT YET VERIFIED against a live torch install -- transforms/preprocessing.py,
-which this depends on, WAS verified with plain numpy/scipy (run
-scripts/preview_frequency_input.py directly if you want to double-check
-that half again). Run this and paste back whatever it prints, including
-any error, the same way you did for preview_spatial_stream.py.
+Verified against a live torch install; transforms/preprocessing.py,
+which this depends on, was separately verified with plain numpy/scipy
+(scripts/preview_frequency_input.py). Rerun this after touching
+models/frequency_stream.py or transforms/preprocessing.py.
 
 What it checks, and why each check matters:
   - freeze=False (the default -- this network trains from scratch, see

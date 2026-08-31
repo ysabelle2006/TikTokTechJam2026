@@ -6,9 +6,8 @@ handle this) and will download the CLIP ViT-B/32 "openai" checkpoint
 (~350MB) on first run -- make sure you've got the bandwidth/time for
 that before running.
 
-NOT YET VERIFIED by Claude -- no torch-capable sandbox was available
-to test this in. Run it and paste back whatever it prints, including
-any error, so we can fix it together rather than you debugging alone.
+Verified against a live torch install. Rerun this after touching
+models/spatial_stream.py or config.py's SPATIAL_* settings.
 
 What it checks, and why each check matters:
   - the model reports 0 trainable parameters (confirms freeze=True

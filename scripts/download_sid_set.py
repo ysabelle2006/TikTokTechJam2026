@@ -17,13 +17,11 @@ we're not tackling here -- and writes:
 
 Run with:  python scripts/download_sid_set.py
 
-Not yet verified against the real dataset (no network access from the
-environment this was written in) -- run it and share whatever it
-prints or any error, and we'll fix it together rather than you
-debugging alone. In particular: the label integers (0/1/2) and their
-meaning are taken from documentation, not a live check, so this prints
-a label-count summary up front -- sanity check that against what you'd
-expect before trusting the output.
+Verified against the real dataset -- data/train/sid_set/ was produced
+by this exact script and is what every V0-V2 training run in results/
+was trained on. The up-front label-count print (see save_split) is
+still worth watching on a re-run: it's your first signal if Hugging
+Face ever changes the label encoding out from under this script.
 """
 
 import csv

@@ -17,9 +17,9 @@ hand-rolled resize/normalize, since CLIP was trained with a specific
 normalization -- reinventing that risks a subtle mismatch that would
 quietly hurt the embedding's quality.
 
-NOT YET VERIFIED -- written without access to a torch-capable
-environment. Run scripts/preview_spatial_stream.py once dependencies
-are installed and report back what it prints, including any error.
+Verified via scripts/preview_spatial_stream.py, and exercised in
+production across every V0-V2 training/evaluation/inference run in
+results/ -- rerun that smoke test if you touch this module.
 """
 
 import torch

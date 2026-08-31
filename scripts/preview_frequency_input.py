@@ -2,7 +2,8 @@
 Smoke test for transforms/preprocessing.py -- no dataset, no torch
 needed (unlike preview_spatial_stream.py / preview_frequency_stream.py,
 this module is plain numpy/scipy/PIL, so this script actually runs in
-any sandbox and its results are real, not "NOT YET VERIFIED").
+any sandbox -- and, unlike the two model-level smoke tests, never
+depended on a torch install to be verified in the first place).
 
 What it checks, and why each check matters:
   - prepare_frequency_input() returns the expected shape for both

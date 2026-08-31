@@ -3,8 +3,10 @@ Smoke test for models/fusion.py, wired up end-to-end with the real
 spatial + frequency streams on two real manifest images -- the last
 integration check before committing to a full train_v1 run.
 
-NOT YET VERIFIED against a live torch install. Run this and paste back
-whatever it prints, including any error.
+Verified against a live torch install, and superseded in practice by
+train_v1/train_v2 actually training FusionHead end-to-end -- kept as a
+fast, no-training-loop regression check to rerun after touching
+models/fusion.py or either stream.
 
 What it checks, and why each check matters:
   - FusionHead accepts the (512-d, 128-d, scalar) triple the streams

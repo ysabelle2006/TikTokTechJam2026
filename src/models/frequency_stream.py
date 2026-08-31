@@ -45,11 +45,10 @@ not something the CNN produces, and not something that needs a
 gradient, so it's computed once here rather than re-derived from the
 embedding downstream.
 
-NOT YET VERIFIED against a live torch install -- transforms/preprocessing.py
-(which this depends on) WAS verified with plain numpy/scipy (see
-scripts/preview_frequency_input.py). Run scripts/preview_frequency_stream.py
-once dependencies are installed and report back what it prints,
-including any error, the same way we did for spatial_stream.py.
+Verified via scripts/preview_frequency_stream.py (which also confirms
+transforms/preprocessing.py, see scripts/preview_frequency_input.py),
+and exercised in production across every V1/V2 training/evaluation run
+in results/ -- rerun that smoke test if you touch this module.
 """
 
 import torch

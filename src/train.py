@@ -79,7 +79,7 @@ from tqdm import tqdm
 
 from config import CHECKPOINT_DIR, EMBEDDING_CACHE_DIR, FREQUENCY_MODE, SPATIAL_EMBED_DIM
 from models.frequency_stream import FrequencyStream
-from models.fusion import FusionHead
+from models.fusion import FusionHead, save_architecture_metadata
 from transforms.augmentations import apply_condition
 from transforms.preprocessing import prepare_frequency_input
 from transforms.preprocessing import residual_energy as compute_residual_energy
@@ -495,6 +495,7 @@ def train_v2(
     num_workers: int = 4,
     freq_mode: str = None,
     limit: int = None,
+    use_freq_gate: bool = False,
 ):
     clean_embeddings, clean_rows = load_cached("train")
     clean_embeddings, clean_rows = _drop_nan_rows(clean_embeddings, clean_rows)
@@ -602,9 +603,10 @@ def train_v2(
                              num_workers=num_workers, persistent_workers=persistent_workers)
 
     resolved_mode = freq_mode or FREQUENCY_MODE
-    print(f"Building frequency stream (mode={resolved_mode}, trained from scratch) + fusion head...")
+    print(f"Building frequency stream (mode={resolved_mode}, trained from scratch) + fusion head "
+          f"(use_freq_gate={use_freq_gate})...")
     freq_stream = FrequencyStream(freeze=False, mode=freq_mode)
-    fusion = FusionHead()
+    fusion = FusionHead(use_freq_gate=use_freq_gate)
 
     optimizer = torch.optim.Adam(
         list(freq_stream.model.parameters()) + list(fusion.parameters()), lr=lr
@@ -668,7 +670,18 @@ def train_v2(
               f"val_loss={val_metrics['loss']:.4f}  val_acc={val_metrics['acc']:.4f}  "
               f"(clean={val_metrics['clean_acc']:.4f}  augmented={val_metrics['aug_acc']:.4f}  gap={gap:+.4f}){marker}")
 
-    ckpt_dir = Path(CHECKPOINT_DIR) / f"v2_augmented_{resolved_mode}"
+    # A gated run gets its OWN checkpoint dir (..._gated) rather than
+    # overwriting checkpoints/v2_augmented_<mode>/ -- that directory is
+    # the already-evaluated, README-documented V2 checkpoint every
+    # results/*.json and this project's writeup point at; a retrain that
+    # silently clobbered it would make "compare gated vs. non-gated"
+    # impossible and could lose the one working checkpoint if the gated
+    # run turns out worse. Every downstream script (evaluate.py,
+    # calibrate.py, infer.py, explain.py, error_analysis.py) already
+    # accepts an explicit --checkpoint path, so pointing them at the
+    # gated checkpoint costs nothing extra.
+    dir_name = f"v2_augmented_{resolved_mode}" + ("_gated" if use_freq_gate else "")
+    ckpt_dir = Path(CHECKPOINT_DIR) / dir_name
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = ckpt_dir / "model.pt"
     torch.save(
@@ -682,6 +695,13 @@ def train_v2(
         },
         ckpt_path,
     )
+    # Sidecar recording whether this checkpoint's FusionHead was built
+    # with use_freq_gate=True -- evaluate.py/calibrate.py/detector.py all
+    # read this before constructing a FusionHead to load this state dict
+    # into, so a gated and non-gated checkpoint can coexist without
+    # either loader needing to be told by hand which is which. See
+    # models.fusion's save_architecture_metadata docstring.
+    save_architecture_metadata(ckpt_dir, use_freq_gate)
     print(f"\nSaved checkpoint from epoch {tracker.best_epoch}/{epochs} "
           f"(val_loss={tracker.best_val_loss:.4f}) -> {ckpt_path}")
     freq_stream.model.load_state_dict(tracker.best_state["frequency_cnn"])
@@ -703,6 +723,11 @@ def main():
                          help="v2 only: restrict to a random N-image subset (not N rows -- an image's clean "
                               "row and all its augmented rows travel together) for a fast smoke test before "
                               "committing to the full ~4x-larger-than-V1 training set")
+    parser.add_argument("--use-freq-gate", action="store_true",
+                         help="v2 only: build FusionHead with the residual-energy-conditioned gate on the "
+                              "frequency embedding (see models/fusion.py's module docstring) instead of the "
+                              "plain V1-style concatenation. Off by default -- every existing checkpoint was "
+                              "trained without it, and passing this only affects a fresh training run.")
     args = parser.parse_args()
 
     if args.stage == "v0":
@@ -723,6 +748,7 @@ def main():
             num_workers=args.num_workers,
             freq_mode=args.freq_mode,
             limit=args.limit,
+            use_freq_gate=args.use_freq_gate,
         )
 
 

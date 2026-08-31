@@ -29,6 +29,13 @@ FREQUENCY_INPUT_SIZE = 224
 FUSION_INPUT_DIM = SPATIAL_EMBED_DIM + FREQUENCY_EMBED_DIM + 1  # +1 = residual-energy scalar
 FUSION_HIDDEN_DIMS = (256, 64)
 
+# V4 (opt-in): models.fusion.FusionHead(use_freq_gate=True)'s small gate
+# network -- residual_energy (1-d) -> this many hidden units -> a [0, 1]
+# weight that scales the frequency embedding before fusion. Kept tiny on
+# purpose (this is a gate, not a second forensic branch); see fusion.py's
+# module docstring for why this exists.
+FUSION_FREQ_GATE_HIDDEN_DIM = 8
+
 # Training objective (V3): L = L_cls(y_hat, y) + L_cls(y_hat_t, y) + CONSISTENCY_LOSS_WEIGHT * L_consistency(y_hat, y_hat_t)
 CONSISTENCY_LOSS_WEIGHT = 0.5    # lambda -- tune once L_cls and L_consistency are both being logged separately
 
