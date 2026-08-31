@@ -4,14 +4,13 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from PIL import Image
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import ToTensor
 
 from tiktoktechjam2026.models.frequency_stream import FrequencyStream
-from tiktoktechjam2026.models.fusion import FusionHead
+from tiktoktechjam2026.models.fusion import ResidualFusionHead
 
 
 CACHE_DIR = Path("cache/spatial_embeddings")
@@ -19,14 +18,28 @@ CACHE_DIR = Path("cache/spatial_embeddings")
 EMBEDDING_PATH = CACHE_DIR / "train_clean.npy"
 INDEX_PATH = CACHE_DIR / "train_clean_index.csv"
 
-CHECKPOINT_PATH = Path(
-    "checkpoints/v1_fusion_sharedtrain_best.pt"
+SPATIAL_CHECKPOINT = Path(
+    "checkpoints/v0_spatial_sharedtrain_best.pt"
+)
+
+OUTPUT_CHECKPOINT = Path(
+    "checkpoints/v2_residual_fusion_fft_best.pt"
 )
 
 
-# ============================================================
-# Dataset
-# ============================================================
+class SpatialHead(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Linear(512, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+        )
+
+    def forward(self, x):
+        return self.net(x).squeeze(1)
+
 
 class CachedFusionDataset(Dataset):
     def __init__(self, embeddings, rows):
@@ -45,31 +58,14 @@ class CachedFusionDataset(Dataset):
             self.embeddings[index]
         ).float()
 
-        label = float(row["label"])
-
         return {
             "spatial_embedding": spatial_embedding,
             "path": row["path"],
-            "label": label,
+            "label": float(row["label"]),
         }
 
 
-# ============================================================
-# Load cache
-# ============================================================
-
 def load_cache():
-    if not EMBEDDING_PATH.is_file():
-        raise FileNotFoundError(
-            f"{EMBEDDING_PATH} not found.\n"
-            "Run cache_embeddings.py first."
-        )
-
-    if not INDEX_PATH.is_file():
-        raise FileNotFoundError(
-            f"{INDEX_PATH} not found."
-        )
-
     embeddings = np.load(
         EMBEDDING_PATH
     )
@@ -86,20 +82,9 @@ def load_cache():
             "have different lengths."
         )
 
-    # Remove any failed/NaN cache rows
     valid_mask = ~np.isnan(
         embeddings
     ).any(axis=1)
-
-    skipped = int(
-        (~valid_mask).sum()
-    )
-
-    if skipped:
-        print(
-            f"Dropping {skipped} "
-            f"NaN cached rows."
-        )
 
     embeddings = embeddings[
         valid_mask
@@ -115,17 +100,13 @@ def load_cache():
     return embeddings, rows
 
 
-# ============================================================
-# Main
-# ============================================================
-
 def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
         "--epochs",
         type=int,
-        default=10,
+        default=5,
     )
 
     parser.add_argument(
@@ -140,14 +121,19 @@ def main():
         default=1e-3,
     )
 
+    parser.add_argument(
+    "--limit",
+        type=int,
+        default=None,
+        help="Use only the first N cached rows for a quick smoke test.",
+    )
+
     args = parser.parse_args()
 
     torch.manual_seed(42)
 
     device = torch.device(
-        "cuda"
-        if torch.cuda.is_available()
-        else "cpu"
+        "cuda" if torch.cuda.is_available() else "cpu"
     )
 
     print("Device:", device)
@@ -158,6 +144,14 @@ def main():
 
     embeddings, rows = load_cache()
 
+    if args.limit is not None:
+        embeddings = embeddings[:args.limit]
+        rows = rows[:args.limit]
+
+        print(
+            f"LIMIT ENABLED: using only {len(rows)} images"
+        )
+
     labels_preview = np.array(
         [
             int(row["label"])
@@ -165,36 +159,22 @@ def main():
         ]
     )
 
-    print(
-        "\nLoaded cached training set:"
-    )
-
-    print(
-        "Total images:",
-        len(rows),
-    )
-
+    print("\nLoaded cached training set:")
+    print("Total images:", len(rows))
     print(
         "REAL:",
-        int(
-            (labels_preview == 0).sum()
-        ),
+        int((labels_preview == 0).sum()),
     )
-
     print(
         "FAKE:",
-        int(
-            (labels_preview == 1).sum()
-        ),
+        int((labels_preview == 1).sum()),
     )
 
     # ========================================================
-    # 2. Fixed 80 / 20 split
+    # 2. Fixed 80/20 split
     # ========================================================
 
-    rng = np.random.default_rng(
-        42
-    )
+    rng = np.random.default_rng(42)
 
     permutation = rng.permutation(
         len(rows)
@@ -202,9 +182,7 @@ def main():
 
     val_size = max(
         1,
-        int(
-            len(rows) * 0.2
-        ),
+        int(len(rows) * 0.2),
     )
 
     val_indices = permutation[
@@ -243,8 +221,6 @@ def main():
         val_rows,
     )
 
-    # Keep batches as Python lists because original
-    # images may have different dimensions.
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -272,35 +248,48 @@ def main():
     )
 
     # ========================================================
-    # 3. Build TRAINABLE SRM stream
+    # 3. Load GOOD spatial classifier and FREEZE it
     # ========================================================
 
     print(
-        "\nBuilding SRM frequency stream "
-        "(TRAINABLE, from scratch)..."
+        "\nLoading frozen spatial classifier..."
+    )
+
+    spatial_head = SpatialHead().to(device)
+
+    spatial_head.load_state_dict(
+        torch.load(
+            SPATIAL_CHECKPOINT,
+            map_location=device,
+        )
+    )
+
+    spatial_head.eval()
+
+    for parameter in spatial_head.parameters():
+        parameter.requires_grad = False
+
+    # ========================================================
+    # 4. Trainable SRM
+    # ========================================================
+
+    print(
+        "Building trainable FFT frequency stream..."
     )
 
     frequency = FrequencyStream(
-        "srm"
+    "fft"
     ).to(device)
 
-    frequency.train()
-
-    # IMPORTANT:
-    # Unlike your old train_fusion.py,
-    # we DO NOT load v1_srm_best.pt
-    # and DO NOT freeze the SRM branch.
-
     # ========================================================
-    # 4. Build TRAINABLE fusion head
+    # 5. Residual fusion correction
     # ========================================================
 
     print(
-        "Building fusion head "
-        "(TRAINABLE)..."
+        "Building residual fusion head..."
     )
 
-    fusion = FusionHead().to(
+    fusion = ResidualFusionHead().to(
         device
     )
 
@@ -319,102 +308,135 @@ def main():
     to_tensor = ToTensor()
 
     # ========================================================
-    # Helper: construct one batch
+    # Batch helper
     # ========================================================
 
     def get_features(batch):
-        spatial_embeddings = []
-        frequency_embeddings = []
-        energies = []
+        from collections import defaultdict
+
+        spatial_logits = []
         labels = []
 
-        for item in batch:
-            # ------------------------------------------
-            # Cached CLIP feature
-            # ------------------------------------------
+        # --------------------------------------------------
+        # 1. Spatial logits are cheap because CLIP is cached
+        # --------------------------------------------------
 
-            spatial_embedding = (
-                item[
-                    "spatial_embedding"
-                ]
-                .unsqueeze(0)
-                .to(device)
-            )
+        spatial_embeddings = torch.stack(
+            [
+                item["spatial_embedding"]
+                for item in batch
+            ]
+        ).to(device)
 
-            # Match the normalization used by
-            # your previous fusion training/eval.
-            spatial_embedding = F.normalize(
-                spatial_embedding,
-                dim=1,
-            )
+        with torch.no_grad():
+            spatial_logits = spatial_head(
+                spatial_embeddings
+            ).unsqueeze(1)
 
-            # ------------------------------------------
-            # Original image -> trainable SRM
-            # ------------------------------------------
+        # --------------------------------------------------
+        # 2. Load raw images and group by image dimensions
+        #
+        # Images in one torch batch must have the same H/W.
+        # Grouping lets us batch SRM without resizing and
+        # therefore WITHOUT changing the model behaviour.
+        # --------------------------------------------------
 
+        groups = defaultdict(list)
+
+        for i, item in enumerate(batch):
             image = Image.open(
                 item["path"]
             ).convert("RGB")
 
-            image_tensor = (
-                to_tensor(image)
-                .unsqueeze(0)
-                .to(device)
+            image_tensor = to_tensor(
+                image
             )
 
-            frequency_embedding, energy = (
-                frequency(
-                    image_tensor
-                )
+            shape = tuple(
+                image_tensor.shape
             )
 
-            spatial_embeddings.append(
-                spatial_embedding.squeeze(0)
+            groups[shape].append(
+                (i, image_tensor)
             )
 
-            frequency_embeddings.append(
-                frequency_embedding.squeeze(0)
+        frequency_outputs = [
+            None
+        ] * len(batch)
+
+        energy_outputs = [
+            None
+        ] * len(batch)
+
+        # --------------------------------------------------
+        # 3. Run SRM in REAL batches
+        # --------------------------------------------------
+
+        for shape, items in groups.items():
+
+            indices = [
+                i
+                for i, _ in items
+            ]
+
+            tensors = torch.stack(
+                [
+                    tensor
+                    for _, tensor in items
+                ]
+            ).to(device)
+
+            group_embeddings, group_energies = (
+                frequency(tensors)
             )
 
-            energies.append(
-                energy.squeeze(0)
-            )
+            for local_i, original_i in enumerate(
+                indices
+            ):
+                frequency_outputs[
+                    original_i
+                ] = group_embeddings[
+                    local_i:local_i + 1
+                ]
 
-            labels.append(
-                item["label"]
-            )
+                energy_outputs[
+                    original_i
+                ] = group_energies[
+                    local_i:local_i + 1
+                ]
 
-        spatial_embeddings = (
-            torch.stack(
-                spatial_embeddings
-            )
+        # --------------------------------------------------
+        # 4. Restore original batch order
+        # --------------------------------------------------
+
+        frequency_embeddings = torch.cat(
+            frequency_outputs,
+            dim=0,
         )
 
-        frequency_embeddings = (
-            torch.stack(
-                frequency_embeddings
-            )
-        )
-
-        energies = torch.stack(
-            energies
+        energies = torch.cat(
+            energy_outputs,
+            dim=0,
         )
 
         labels = torch.tensor(
-            labels,
+            [
+                item["label"]
+                for item in batch
+            ],
             dtype=torch.float32,
             device=device,
         )
 
         return (
-            spatial_embeddings,
+            spatial_logits,
             frequency_embeddings,
             energies,
             labels,
         )
 
     # ========================================================
-    # 5. Training
+    # 6. Train
     # ========================================================
 
     best_val_loss = float(
@@ -423,7 +445,7 @@ def main():
 
     best_epoch = None
 
-    CHECKPOINT_PATH.parent.mkdir(
+    OUTPUT_CHECKPOINT.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
@@ -447,7 +469,7 @@ def main():
             optimizer.zero_grad()
 
             (
-                spatial_embeddings,
+                spatial_logits,
                 frequency_embeddings,
                 energies,
                 labels,
@@ -456,7 +478,7 @@ def main():
             )
 
             logits = fusion(
-                spatial_embeddings,
+                spatial_logits,
                 frequency_embeddings,
                 energies,
             ).squeeze(1)
@@ -467,7 +489,6 @@ def main():
             )
 
             loss.backward()
-
             optimizer.step()
 
             batch_size = len(
@@ -515,7 +536,7 @@ def main():
         with torch.no_grad():
             for batch in val_loader:
                 (
-                    spatial_embeddings,
+                    spatial_logits,
                     frequency_embeddings,
                     energies,
                     labels,
@@ -524,7 +545,7 @@ def main():
                 )
 
                 logits = fusion(
-                    spatial_embeddings,
+                    spatial_logits,
                     frequency_embeddings,
                     energies,
                 ).squeeze(1)
@@ -570,18 +591,16 @@ def main():
             f"train loss {train_loss:.4f} | "
             f"train acc {train_accuracy:.3f} | "
             f"val loss {val_loss:.4f} | "
-            f"val acc {val_accuracy:.3f}"
+            f"val acc {val_accuracy:.3f} | "
+            f"alpha {fusion.alpha.item():.4f}"
         )
 
         # ----------------------------------------------------
-        # Best checkpoint by VALIDATION LOSS
+        # Best checkpoint
         # ----------------------------------------------------
 
         if val_loss < best_val_loss:
-            best_val_loss = (
-                val_loss
-            )
-
+            best_val_loss = val_loss
             best_epoch = epoch
 
             torch.save(
@@ -592,10 +611,10 @@ def main():
                     "fusion": (
                         fusion.state_dict()
                     ),
-                    "freq_mode": "srm",
-                    "best_epoch": (
-                        best_epoch
+                    "spatial_checkpoint": str(
+                        SPATIAL_CHECKPOINT
                     ),
+                    "best_epoch": best_epoch,
                     "best_val_loss": (
                         best_val_loss
                     ),
@@ -603,35 +622,30 @@ def main():
                         args.epochs
                     ),
                 },
-                CHECKPOINT_PATH,
+                OUTPUT_CHECKPOINT,
             )
 
             print(
                 "  -> best checkpoint saved"
             )
 
-    # ========================================================
-    # Done
-    # ========================================================
-
     print(
-        "\nSHARED-DATA FUSION "
-        "TRAINING COMPLETE"
+        "\nRESIDUAL FUSION TRAINING COMPLETE"
     )
 
     print(
-        f"Best epoch: "
-        f"{best_epoch}"
+        "Best epoch:",
+        best_epoch,
     )
 
     print(
-        f"Best validation loss: "
-        f"{best_val_loss:.4f}"
+        "Best validation loss:",
+        f"{best_val_loss:.4f}",
     )
 
     print(
         "Saved model:",
-        CHECKPOINT_PATH,
+        OUTPUT_CHECKPOINT,
     )
 
 

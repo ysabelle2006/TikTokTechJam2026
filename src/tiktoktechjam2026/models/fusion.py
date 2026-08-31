@@ -29,55 +29,76 @@ TODO (next step): small MLP, config.FUSION_HIDDEN_DIMS, ending in a
 single logit + sigmoid.
 """
 
-
 import torch
 from torch import nn
 
 
-class FusionHead(nn.Module):
+class ResidualFusionHead(nn.Module):
     """
-    V1 fusion head.
+    Residual fusion head.
+
+    The strong spatial classifier produces the base logit.
+
+    The frequency branch is only allowed to add a correction:
+
+        final_logit =
+            spatial_logit
+            + alpha * frequency_correction
 
     Inputs:
-        spatial_embedding:   [B, 512]
+        spatial_logit:       [B, 1]
         frequency_embedding: [B, 128]
         residual_energy:     [B, 1]
 
-    Combined:
-        512 + 128 + 1 = 641 dimensions
-
     Output:
-        logits: [B, 1]
+        final_logit: [B, 1]
     """
 
     def __init__(self):
         super().__init__()
 
-        self.fusion = nn.Sequential(
-            nn.Linear(641, 256),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-
-            nn.Linear(256, 64),
+        # Frequency-only correction network:
+        # 128 frequency features + 1 residual-energy feature
+        self.frequency_correction = nn.Sequential(
+            nn.Linear(129, 64),
             nn.ReLU(),
             nn.Dropout(0.2),
 
-            nn.Linear(64, 1),
+            nn.Linear(64, 16),
+            nn.ReLU(),
+
+            nn.Linear(16, 1),
+        )
+
+        # Learnable contribution of the frequency branch.
+        #
+        # Start SMALL so the initial model stays close
+        # to the strong spatial-only baseline.
+        self.alpha = nn.Parameter(
+            torch.tensor(0.05)
         )
 
     def forward(
         self,
-        spatial_embedding,
+        spatial_logit,
         frequency_embedding,
         residual_energy,
     ):
-        x = torch.cat(
+        frequency_input = torch.cat(
             [
-                spatial_embedding,
                 frequency_embedding,
                 residual_energy,
             ],
             dim=1,
         )
 
-        return self.fusion(x)
+        correction = self.frequency_correction(
+            frequency_input
+        )
+
+        final_logit = (
+            spatial_logit
+            + self.alpha * correction
+        )
+
+        return final_logit

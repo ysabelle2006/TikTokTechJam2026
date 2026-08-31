@@ -1,0 +1,26 @@
+condition                    AUC       n    unseen-gen AUC
+----------------------------------------------------------
+blur_sigma0.5             0.9560     900            0.9359
+blur_sigma1.0             0.9529     900            0.9301
+blur_sigma2.0             0.9264     900            0.8817
+center_crop               0.9418     900            0.9144
+clean                     0.9510     900            0.9271
+color_jitter              0.9499     900            0.9260
+jpeg_q30                  0.9016     900            0.8441
+jpeg_q50                  0.9254     900            0.8874
+jpeg_q70                  0.9405     900            0.9099
+jpeg_q90                  0.9532     900            0.9300
+noise_sigma0.02           0.9499     900            0.9284
+noise_sigma0.05           0.9051     900            0.8634
+noise_sigma0.1            0.8944     900            0.8430
+resize_0.25               0.9173     900            0.8690
+resize_0.5                0.9401     900            0.9059
+stack_crop_repost         0.9377     900            0.9120
+stack_mild                0.9397     900            0.9059
+stack_moderate            0.9141     900            0.8644
+stack_severe              0.9089     900            0.8508
+
+clean AUC:        0.9510
+avg robust AUC:   0.9308
+avg robust drop:  0.0202
+final score:      0.9409
